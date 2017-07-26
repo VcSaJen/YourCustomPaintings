@@ -1,0 +1,19 @@
+plugins {
+    id 'org.spongepowered.plugin' version '0.8.1'
+}
+
+group 'com.vcsajen'
+version '1.0'
+
+apply plugin: 'java'
+
+sourceCompatibility = 1.8
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testCompile group: 'junit', name: 'junit', version: '4.12'
+    compile 'org.spongepowered:spongeapi:7.0.0-SNAPSHOT'
+}
