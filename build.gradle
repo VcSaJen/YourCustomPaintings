@@ -16,4 +16,7 @@ repositories {
 dependencies {
     testCompile group: 'junit', name: 'junit', version: '4.12'
     compile 'org.spongepowered:spongeapi:7.0.0-SNAPSHOT'
+    compile group: 'se.llbit', name: 'jo-nbt', version: '1.0.0'
+    compile group: 'com.mortennobel', name: 'java-image-scaling', version: '0.8.6'
+    compile group: 'com.jhlabs', name: 'filters', version: '2.0.235-1'
 }
