@@ -15,6 +15,9 @@ public class YcpConfig {
     @Setting(value="progress-report-time", comment="Report progress of operation where possible every X milliseconds")
     private int progressReportTime = 30000;
 
+    @Setting(value="debug-mode", comment="Debug mode. Will write some trash info in plugin's config folder, so not recommended")
+    private boolean debugMode = false;
+
     public int getProgressReportTime() {
         return progressReportTime;
     }
@@ -23,9 +26,11 @@ public class YcpConfig {
         return maxImgFileSize;
     }
 
+    public boolean isDebugMode() {
+        return debugMode;
+    }
 
-    public YcpConfig()
-    {
+    public YcpConfig() {
 
     }
 }

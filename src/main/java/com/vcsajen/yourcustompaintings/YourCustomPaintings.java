@@ -33,8 +33,7 @@ import org.spongepowered.api.text.format.TextColors;
 
 import javax.imageio.ImageIO;
 import java.awt.*;
-import java.awt.image.BufferedImage;
-import java.awt.image.BufferedImageOp;
+import java.awt.image.*;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
@@ -140,6 +139,20 @@ public class YourCustomPaintings {
         }
     }
 
+    private String dbgDir;
+
+    //https://stackoverflow.com/questions/6334311/whats-the-best-way-to-round-a-color-object-to-the-nearest-color-constant
+    static double colorDistance(Color c1, Color c2)
+    {
+        int red1 = c1.getRed();
+        int red2 = c2.getRed();
+        int rmean = (red1 + red2) >> 1;
+        int r = red1 - red2;
+        int g = c1.getGreen() - c2.getGreen();
+        int b = c1.getBlue() - c2.getBlue();
+        return Math.sqrt((((512+rmean)*r*r)>>8) + 4*g*g + (((767-rmean)*b*b)>>8));
+    }
+
     private void runUploadPaintingTask(UploadPaintingParams params) {
         SpongeExecutorService minecraftExecutor = Sponge.getScheduler().createSyncExecutor(myPlugin);
         URLConnection conn = null;
@@ -236,11 +249,59 @@ public class YourCustomPaintings {
             } else {
                 printImgInCenter(scaledImg, img);
             }
-            ImageIO.write(scaledImg, "png", new File("imagae456.png")); //TODO: Удалить
+            if (myConfig.isDebugMode()) {
+                ImageIO.write(scaledImg, "png", new File(dbgDir + "/zzz_scaled_fullcolor_nontiled_img.png"));
+
+                File[] tmpTileImgFiles = (new File(dbgDir)).listFiles((dir, name) -> name.matches( "scaled_mapcolor_tile_.*_img\\.png" ));
+                if (tmpTileImgFiles!=null)
+                    for ( final File file : tmpTileImgFiles ) {
+                        if ( !file.delete() ) {
+                            logger.error( "Can't remove " + file.getAbsolutePath() );
+                        }
+                    }
+            }
 
             params.getMessageChannel().send(Text.of("Converting to map palette…"));
 
+            byte[] mapData = new byte[128*128];
 
+            for (int k=0; k<params.getMapsX(); k++) {
+                for (int l=0; l<params.getMapsY(); l++) {
+                    //BufferedImage mapImgIn = scaledImg.getSubimage(k*128,l*128,128,128);
+                    BufferedImage mapImgIn = new BufferedImage(128, 128, BufferedImage.TYPE_4BYTE_ABGR);
+                    Graphics2D mapImgInGraphics = mapImgIn.createGraphics();
+                    //Color oldColor = mapImgInGraphics.getColor();
+                    //mapImgInGraphics.setPaint(new Color(255,255,255,0));
+                    //mapImgInGraphics.fillRect(0, 0, mapImgIn.getWidth(), mapImgIn.getHeight());
+                    //mapImgInGraphics.setColor(oldColor);
+                    mapImgInGraphics.drawImage(scaledImg, -k*128, -l*128, null);
+                    mapImgInGraphics.dispose();
+                    BufferedImage mapImgOut = new BufferedImage(128, 128, BufferedImage.TYPE_4BYTE_ABGR);
+                    byte[] pixels = ((DataBufferByte) mapImgIn.getRaster().getDataBuffer()).getData();
+                    byte[] outPixels = ((DataBufferByte) mapImgOut.getRaster().getDataBuffer()).getData();
+
+                    for (int i=0; i<mapImgIn.getHeight(); i++) {
+                        for (int j = 0; j < mapImgIn.getWidth(); j++) {
+                            int w = mapImgIn.getWidth();
+                            boolean color = (pixels[i*w*4+j*4+0] & 0xFF) > 128;
+                            mapData[i*w+j] = color ? (byte)119 : 0;
+                            outPixels[i*w*4+j*4+0] = color ? (byte)255 : 0;
+                            outPixels[i*w*4+j*4+1] = 0;
+                            outPixels[i*w*4+j*4+2] = 0;
+                            outPixels[i*w*4+j*4+3] = 0;
+                        }
+                    }
+                    PixelInterleavedSampleModel sampleModel = (PixelInterleavedSampleModel)mapImgOut.getRaster().getSampleModel();
+                    if (myConfig.isDebugMode()) {
+                        mapImgOut = new BufferedImage(mapImgOut.getColorModel(),
+                                Raster.createInterleavedRaster(new DataBufferByte(outPixels, outPixels.length), mapImgOut.getWidth(), mapImgOut.getHeight(), sampleModel.getScanlineStride(), sampleModel.getPixelStride(), sampleModel.getBandOffsets(), null),
+                                mapImgOut.isAlphaPremultiplied(),
+                                null);
+
+                        ImageIO.write(mapImgOut, "png", new File(dbgDir+"/scaled_mapcolor_tile_"+l+"_"+k+"_img.png"));
+                    }
+                }
+            }
 
 
 
@@ -337,6 +398,17 @@ public class YourCustomPaintings {
                 .executor(this::cmdMyTest)
                 .build();
         game.getCommandManager().register(this, uploadPaintingCmdSpec, "uploadpainting", "up-p");
+        //-----------
+        //Other
+        dbgDir = "config/"+myPlugin.getId()+"/debug";
+        if (myConfig.isDebugMode()) {
+            File directory = new File(dbgDir);
+            if (!directory.exists()) {
+                directory.mkdirs();
+                // If you require it to make the entire directory path including parents,
+                // use directory.mkdirs(); here instead.
+            }
+        }
     }
 
     @Listener
