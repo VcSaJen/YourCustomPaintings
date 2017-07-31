@@ -1,5 +1,11 @@
 package com.vcsajen.yourcustompaintings;
 
+import com.flowpowered.nbt.ByteArrayTag;
+import com.flowpowered.nbt.CompoundTag;
+import com.flowpowered.nbt.ShortTag;
+import com.flowpowered.nbt.Tag;
+import com.flowpowered.nbt.stream.NBTInputStream;
+import com.flowpowered.nbt.stream.NBTOutputStream;
 import com.google.common.reflect.TypeToken;
 import com.google.inject.Inject;
 import com.mortennobel.imagescaling.*;
@@ -17,9 +23,16 @@ import org.spongepowered.api.command.CommandSource;
 import org.spongepowered.api.command.args.CommandContext;
 import org.spongepowered.api.command.args.GenericArguments;
 import org.spongepowered.api.command.spec.CommandSpec;
+import org.spongepowered.api.config.ConfigDir;
+import org.spongepowered.api.data.DataQuery;
+import org.spongepowered.api.data.DataView;
+import org.spongepowered.api.entity.living.player.Player;
 import org.spongepowered.api.event.Listener;
 import org.spongepowered.api.event.game.state.GamePreInitializationEvent;
 import org.spongepowered.api.event.game.state.GameStartedServerEvent;
+import org.spongepowered.api.event.world.ConstructWorldPropertiesEvent;
+import org.spongepowered.api.item.ItemTypes;
+import org.spongepowered.api.item.inventory.ItemStack;
 import org.spongepowered.api.plugin.Plugin;
 import org.spongepowered.api.plugin.PluginContainer;
 import org.spongepowered.api.config.DefaultConfig;
@@ -31,6 +44,7 @@ import org.spongepowered.api.scheduler.Task;
 import org.spongepowered.api.text.channel.MessageChannel;
 import org.spongepowered.api.text.format.TextColors;
 
+import javax.annotation.Nullable;
 import javax.imageio.ImageIO;
 import java.awt.*;
 import java.awt.image.*;
@@ -39,11 +53,13 @@ import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLConnection;
-import java.nio.channels.Channels;
-import java.nio.channels.ReadableByteChannel;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.Callable;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -67,10 +83,17 @@ public class YourCustomPaintings {
     @DefaultConfig(sharedRoot = true)
     private ConfigurationLoader<CommentedConfigurationNode> configManager;
 
+    @Inject
+    @ConfigDir(sharedRoot = false)
+    private Path configDir;
+
     private YcpConfig myConfig;
 
+    @SuppressWarnings("WeakerAccess")
     private class UploadPaintingParams
     {
+        @Nullable
+        private UUID callerPlr;
         private MessageChannel messageChannel;
         private String url;
         private int mapsX;
@@ -102,13 +125,50 @@ public class YourCustomPaintings {
             return unsharpenMask;
         }
 
-        public UploadPaintingParams(MessageChannel messageChannel, String url, int mapsX, int mapsY, ScaleMode scaleMode, AdvancedResizeOp.UnsharpenMask unsharpenMask) {
+        public Optional<UUID> getCallerPlr() {
+            return Optional.ofNullable(callerPlr);
+        }
+
+        public UploadPaintingParams(@Nullable UUID callerPlr, MessageChannel messageChannel, String url, int mapsX, int mapsY, ScaleMode scaleMode, AdvancedResizeOp.UnsharpenMask unsharpenMask) {
+            this.callerPlr = callerPlr;
             this.messageChannel = messageChannel;
             this.url = url;
             this.mapsX = mapsX;
             this.mapsY = mapsY;
             this.scaleMode = scaleMode;
             this.unsharpenMask = unsharpenMask;
+        }
+    }
+
+    private class RegisterMapParams
+    {
+        @Nullable
+        private UUID callerPlr;
+        private MessageChannel messageChannel;
+        private String tmpId;
+        private int tileCount;
+
+        public Optional<UUID> getCallerPlr() {
+            return Optional.ofNullable(callerPlr);
+        }
+
+        public MessageChannel getMessageChannel() {
+            return messageChannel;
+        }
+
+        public String getTmpId() {
+            return tmpId;
+        }
+
+        public int getTileCount() {
+            return tileCount;
+        }
+
+        public RegisterMapParams(@Nullable UUID callerPlr, MessageChannel messageChannel, String tmpId, int tileCount) {
+            this.callerPlr = callerPlr;
+            this.messageChannel = messageChannel;
+            this.tmpId = tmpId;
+            this.tileCount = tileCount;
         }
     }
 
@@ -139,7 +199,8 @@ public class YourCustomPaintings {
         }
     }
 
-    private String dbgDir;
+    private Path dbgDir;
+    private RandomStringGenerator randomStringGenerator;
 
     //https://stackoverflow.com/questions/6334311/whats-the-best-way-to-round-a-color-object-to-the-nearest-color-constant
     static double colorDistance(Color c1, Color c2)
@@ -250,9 +311,9 @@ public class YourCustomPaintings {
                 printImgInCenter(scaledImg, img);
             }
             if (myConfig.isDebugMode()) {
-                ImageIO.write(scaledImg, "png", new File(dbgDir + "/zzz_scaled_fullcolor_nontiled_img.png"));
+                ImageIO.write(scaledImg, "png", dbgDir.resolve("zzz_scaled_fullcolor_nontiled_img.png").toFile());
 
-                File[] tmpTileImgFiles = (new File(dbgDir)).listFiles((dir, name) -> name.matches( "scaled_mapcolor_tile_.*_img\\.png" ));
+                File[] tmpTileImgFiles = (dbgDir.toFile().listFiles((dir, name) -> name.matches( "scaled_mapcolor_tile_.*_img\\.png" )));
                 if (tmpTileImgFiles!=null)
                     for ( final File file : tmpTileImgFiles ) {
                         if ( !file.delete() ) {
@@ -262,6 +323,16 @@ public class YourCustomPaintings {
             }
 
             params.getMessageChannel().send(Text.of("Converting to map palette…"));
+            final String tmpId = randomStringGenerator.generate();
+            final Path dataFolder = Sponge.getGame().getSavesDirectory().resolve(Sponge.getServer().getDefaultWorldName()).resolve("data");
+
+            File[] tmpMapDatFiles = (dataFolder.toFile().listFiles((dir, name) -> name.matches( "map_tmp_.*\\.dat" )));
+            if (tmpMapDatFiles!=null)
+                for ( final File file : tmpMapDatFiles ) {
+                    if ( !file.delete() ) {
+                        logger.error( "Can't remove " + file.getAbsolutePath() );
+                    }
+                }
 
             byte[] mapData = new byte[128*128];
 
@@ -298,27 +369,77 @@ public class YourCustomPaintings {
                                 mapImgOut.isAlphaPremultiplied(),
                                 null);
 
-                        ImageIO.write(mapImgOut, "png", new File(dbgDir+"/scaled_mapcolor_tile_"+l+"_"+k+"_img.png"));
+                        ImageIO.write(mapImgOut, "png", dbgDir.resolve("scaled_mapcolor_tile_"+l+"_"+k+"_img.png").toFile());
+                    }
+                    //Генерируем сами файлы карт
+                    Path fileName = dataFolder.resolve("map_tmp_"+tmpId+"_"+(k+l*params.getMapsX())+".dat");
+                    myPlugin.getAsset("map_N.dat").orElseThrow(() -> new IOException("Asset map_N.dat not found"))
+                            .copyToFile(fileName);
+
+                    CompoundTag root;
+                    try (InputStream fis = new FileInputStream(fileName.toFile());
+                         NBTInputStream nbtInputStream = new NBTInputStream(fis, true)) {
+                        root = (CompoundTag)nbtInputStream.readTag();
+                    }
+                    ((CompoundTag)root.getValue().get("data")).getValue().put(new ByteArrayTag("colors", mapData));
+                    try (OutputStream fos = new FileOutputStream(fileName.toFile());
+                         NBTOutputStream nbtOutputStream = new NBTOutputStream(fos, true)) {
+                        nbtOutputStream.writeTag(root);
                     }
                 }
             }
 
-
-
-
-
-
-            List<Future<String>> futuresGetLastMapInd = minecraftExecutor.invokeAll(Collections.singleton(new CallableWithOneParam<String,String>("test", s -> {
+            List<Future<Boolean>> futuresGetLastMapInd = minecraftExecutor.invokeAll(Collections.singleton(new CallableWithOneParam<RegisterMapParams,Boolean>(
+                    new RegisterMapParams(params.getCallerPlr().orElse(null), params.getMessageChannel(), tmpId, params.getMapsX()*params.getMapsY()), regMapParams -> {
                 params.getMessageChannel().send(Text.of("Generating map…"));
+                try {
+                    Path idCountsPath = dataFolder.resolve("idcounts.dat");
+                    if (Files.notExists(idCountsPath))
+                        myPlugin.getAsset("idcounts.dat").orElseThrow(() -> new IOException("Asset idcounts.dat not found"))
+                                .copyToFile(idCountsPath);
 
-                return "returntest";
+                    CompoundTag root;
+                    try (InputStream fis = new FileInputStream(idCountsPath.toFile());
+                         NBTInputStream nbtInputStream = new NBTInputStream(fis, false)) {
+                        root = (CompoundTag) nbtInputStream.readTag();
+                    }
+                    final int lastMapId = ((ShortTag)root.getValue().get("map")).getValue();
+                    if (lastMapId+regMapParams.getTileCount()>Short.MAX_VALUE) {
+                        regMapParams.getMessageChannel().send(Text.of(TextColors.RED, "Map ID limit exceed! (projected: "+(lastMapId+regMapParams.getTileCount())+", max: "+Short.MAX_VALUE+")"));
+                        return false;
+                    }
+                    root.getValue().put(new ShortTag("map", (short)(lastMapId+regMapParams.getTileCount())));
+
+                    for (int i=0;i<regMapParams.getTileCount();i++) {
+                        Path mapFileName = dataFolder.resolve("map_tmp_"+tmpId+"_"+i+".dat");
+                        Path newMapFileName = dataFolder.resolve("map_"+(lastMapId+1+i)+".dat");
+                        Files.move(mapFileName, newMapFileName, StandardCopyOption.REPLACE_EXISTING);
+                    }
+
+                    try (OutputStream fos = new FileOutputStream(idCountsPath.toFile());
+                         NBTOutputStream nbtOutputStream = new NBTOutputStream(fos, false)) {
+                        nbtOutputStream.writeTag(root);
+                    }
+                    if (regMapParams.getCallerPlr().isPresent()) {
+                        Sponge.getGame().getServer().getPlayer(regMapParams.getCallerPlr().get()).ifPresent(player -> {
+                            for (int i=0;i<regMapParams.getTileCount();i++) {
+                                ItemStack itemStack = ItemStack.builder().itemType(ItemTypes.FILLED_MAP).quantity(1).build();
+                                DataView rawData = itemStack.toContainer();
+                                rawData.set(DataQuery.of("UnsafeDamage"), lastMapId+1+i);
+                                itemStack = ItemStack.builder().fromContainer(rawData).build();
+                                player.getInventory().offer(itemStack);
+                            }
+                        });
+                    }
+                } catch (IOException e) {
+                    regMapParams.getMessageChannel().send(Text.of(TextColors.RED, "IO Error while performing actual map rename/registration"));
+                    logger.error("IO Error in futuresGetLastMapInd!", e);
+                    return false;
+                }
+                return true;
             })));
 
-            List<Future<String>> futuresSetLastMapInd = minecraftExecutor.invokeAll(Collections.singleton(new CallableWithOneParam<String,String>("test", s -> {
-
-                return "returntest";
-            })));
-            String s = futuresSetLastMapInd.get(0).get();
+            boolean b = futuresGetLastMapInd.get(0).get();
 
 
             params.getMessageChannel().send(Text.of("Success!"));
@@ -355,13 +476,17 @@ public class YourCustomPaintings {
         cmdSource.sendMessage(Text.of("Downloading "+url+"…"));
 
         Task task = Task.builder().execute(new RunnableWithOneParam<UploadPaintingParams>(
-                new UploadPaintingParams(cmdSource.getMessageChannel(), url, mapsX, mapsY, scaleMode, unsharpenMask), this::runUploadPaintingTask))
+                new UploadPaintingParams(Player.class.isInstance(cmdSource) ? ((Player)cmdSource).getUniqueId() : null, cmdSource.getMessageChannel(), url, mapsX, mapsY, scaleMode, unsharpenMask), this::runUploadPaintingTask))
                 .async()
                 .submit(myPlugin);
 
-        cmdSource.getMessageChannel().send(Text.of("Success!"));
-        cmdSource.sendMessage(Text.of("Success!"));
+        cmdSource.getMessageChannel().send(Text.of("..."));
         return CommandResult.success();
+    }
+
+    @Listener
+    public void onConstructWorld(ConstructWorldPropertiesEvent event) {
+        logger.debug("Saves directory: "+String.valueOf(game.getSavesDirectory()));
     }
 
     @Listener
@@ -400,15 +525,16 @@ public class YourCustomPaintings {
         game.getCommandManager().register(this, uploadPaintingCmdSpec, "uploadpainting", "up-p");
         //-----------
         //Other
-        dbgDir = "config/"+myPlugin.getId()+"/debug";
+        dbgDir = configDir.resolve("debug");
         if (myConfig.isDebugMode()) {
-            File directory = new File(dbgDir);
+            File directory = dbgDir.toFile();
             if (!directory.exists()) {
                 directory.mkdirs();
                 // If you require it to make the entire directory path including parents,
                 // use directory.mkdirs(); here instead.
             }
         }
+        randomStringGenerator = new RandomStringGenerator(8);
     }
 
     @Listener

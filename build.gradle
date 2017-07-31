@@ -20,13 +20,13 @@ dependencies {
     testCompile group: 'junit', name: 'junit', version: '4.12'
     shadow 'org.spongepowered:spongeapi:7.0.0-SNAPSHOT'
 
-    compile group: 'se.llbit', name: 'jo-nbt', version: '1.0.0'
+    compile 'com.flowpowered:flow-nbt:1.0.0'
     compile group: 'com.mortennobel', name: 'java-image-scaling', version: '0.8.6'
     compile group: 'com.jhlabs', name: 'filters', version: '2.0.235-1'
 }
 
 shadowJar {
-    relocate 'se.llbit', 'com.vcsajen.yourcustompaintings.se.llbit'
-    relocate 'com.mortennobel', 'com.vcsajen.yourcustompaintings.com.mortennobel'
+    relocate 'com.flowpowered.nbt', 'com.vcsajen.yourcustompaintings.com.flowpowered.flow-nbt'
+    relocate 'com.mortennobel.imagescaling', 'com.vcsajen.yourcustompaintings.com.mortennobel.imagescaling'
     relocate 'com.jhlabs', 'com.vcsajen.yourcustompaintings.com.jhlabs'
 }
