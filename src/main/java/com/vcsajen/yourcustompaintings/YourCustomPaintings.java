@@ -185,6 +185,33 @@ public class YourCustomPaintings {
         Triangle
     }
 
+    private final int[] mapIndexedColors = {0x00000000, 0x00000000, 0x00000000, 0x00000000, 0xFF5A7E28, 0xFF6E9A30, 0xFF7FB238, 0xFF435E1E,
+            0xFFAEA473, 0xFFD5C98D, 0xFFF7E9A3, 0xFF837B56, 0xFF8C8C8C, 0xFFACACAC, 0xFFC7C7C7, 0xFF696969,
+            0xFFB40000, 0xFFDC0000, 0xFFFF0000, 0xFF870000, 0xFF7171B4, 0xFF8A8ADC, 0xFFA0A0FF, 0xFF555587,
+            0xFF767676, 0xFF909090, 0xFFA7A7A7, 0xFF585858, 0xFF005800, 0xFF006B00, 0xFF007C00, 0xFF004200,
+            0xFFB4B4B4, 0xFFDCDCDC, 0xFFFFFFFF, 0xFF878787, 0xFF747782, 0xFF8D919F, 0xFFA4A8B8, 0xFF575961,
+            0xFF6B4D36, 0xFF825E42, 0xFF976D4D, 0xFF503A29, 0xFF4F4F4F, 0xFF616161, 0xFF707070, 0xFF3B3B3B,
+            0xFF2D2DB4, 0xFF3737DC, 0xFF4040FF, 0xFF222287, 0xFF655433, 0xFF7B673E, 0xFF8F7748, 0xFF4C3F26,
+            0xFFB4B2AD, 0xFFDCD9D3, 0xFFFFFCF5, 0xFF878582, 0xFF985A24, 0xFFBA6E2C, 0xFFD87F33, 0xFF72431B,
+            0xFF7E3698, 0xFF9A42BA, 0xFFB24CD8, 0xFF5E2872, 0xFF486C98, 0xFF5884BA, 0xFF6699D8, 0xFF365172,
+            0xFFA2A224, 0xFFC6C62C, 0xFFE5E533, 0xFF79791B, 0xFF5A9012, 0xFF6EB016, 0xFF7FCC19, 0xFF436C0D,
+            0xFFAB5A74, 0xFFD16E8E, 0xFFF27FA5, 0xFF804357, 0xFF363636, 0xFF424242, 0xFF4C4C4C, 0xFF282828,
+            0xFF6C6C6C, 0xFF848484, 0xFF999999, 0xFF515151, 0xFF365A6C, 0xFF426E84, 0xFF4C7F99, 0xFF284351,
+            0xFF5A2C7E, 0xFF6E369A, 0xFF7F3FB2, 0xFF43215E, 0xFF24367E, 0xFF2C429A, 0xFF334CB2, 0xFF1B285E,
+            0xFF483624, 0xFF58422C, 0xFF664C33, 0xFF36281B, 0xFF485A24, 0xFF586E2C, 0xFF667F33, 0xFF36431B,
+            0xFF6C2424, 0xFF842C2C, 0xFF993333, 0xFF511B1B, 0xFF121212, 0xFF161616, 0xFF191919, 0xFF0D0D0D,
+            0xFFB0A836, 0xFFD8CD42, 0xFFFAEE4D, 0xFF847E29, 0xFF419B96, 0xFF4FBDB8, 0xFF5CDBD5, 0xFF317471,
+            0xFF345AB4, 0xFF406EDC, 0xFF4A80FF, 0xFF274487, 0xFF009929, 0xFF00BB32, 0xFF00D93A, 0xFF00731F,
+            0xFF5B3D23, 0xFF6F4A2A, 0xFF815631, 0xFF442E1A, 0xFF4F0100, 0xFF610200, 0xFF700200, 0xFF3B0100,
+            0xFF947D72, 0xFFB4998B, 0xFFD1B1A1, 0xFF6F5E55, 0xFF703A19, 0xFF89471F, 0xFF9F5224, 0xFF542B13,
+            0xFF693D4C, 0xFF814B5D, 0xFF95576C, 0xFF4F2E39, 0xFF4F4C61, 0xFF615D77, 0xFF706C8A, 0xFF3B3949,
+            0xFF835E19, 0xFFA0731F, 0xFFBA8524, 0xFF624613, 0xFF495325, 0xFF59652E, 0xFF677535, 0xFF373E1C,
+            0xFF713637, 0xFF8A4243, 0xFFA04D4E, 0xFF552929, 0xFF281D19, 0xFF31231E, 0xFF392923, 0xFF1E1613,
+            0xFF5F4C45, 0xFF745C55, 0xFF876B62, 0xFF473934, 0xFF3D4141, 0xFF4B4F4F, 0xFF575C5C, 0xFF2E3131,
+            0xFF56343E, 0xFF693F4C, 0xFF7A4958, 0xFF41272F, 0xFF362C41, 0xFF42354F, 0xFF4C3E5C, 0xFF282131,
+            0xFF362319, 0xFF422B1E, 0xFF4C3223, 0xFF281A13, 0xFF363A1E, 0xFF424724, 0xFF4C522A, 0xFF282B16,
+            0xFF642A20, 0xFF7B3428, 0xFF8E3C2E, 0xFF4B2018};
+
     private static void printImgInCenter(BufferedImage printOn, BufferedImage whatToPrint)
     {
         Graphics2D printOnImgGraphics = printOn.createGraphics();
@@ -213,6 +240,31 @@ public class YourCustomPaintings {
         int b = c1.getBlue() - c2.getBlue();
         return Math.sqrt((((512+rmean)*r*r)>>8) + 4*g*g + (((767-rmean)*b*b)>>8));
     }
+
+    static double colorDistance(int R1, int G1, int B1, int R2, int G2, int B2)
+    {
+        int rmean = (R1 + R2) >> 1;
+        int r = R1 - R2;
+        int g = G1 - G2;
+        int b = B1 - B2;
+        return Math.sqrt((((512+rmean)*r*r)>>8) + 4*g*g + (((767-rmean)*b*b)>>8));
+    }
+
+    int closestMapColorIndex(int R, int G, int B)
+    {
+        int closestIndex = 0;
+        double closestDistance = 1E100;
+        for (int i=4; i<mapIndexedColors.length; i++) { //0-3 are reserved for transparent
+            double curDist = colorDistance(R,G,B,(mapIndexedColors[i]&0x00FF0000)>>16,(mapIndexedColors[i]&0x0000FF00)>>8,mapIndexedColors[i]&0x000000FF);
+            //double curDist = colorDistance(new Color(R,G,B), new Color(mapIndexedColors[i]));
+            if (curDist<closestDistance) {
+                closestIndex = i;
+                closestDistance = curDist;
+            }
+        }
+        return closestIndex;
+    }
+
 
     private void runUploadPaintingTask(UploadPaintingParams params) {
         SpongeExecutorService minecraftExecutor = Sponge.getScheduler().createSyncExecutor(myPlugin);
@@ -334,6 +386,7 @@ public class YourCustomPaintings {
                     }
                 }
 
+
             byte[] mapData = new byte[128*128];
 
             for (int k=0; k<params.getMapsX(); k++) {
@@ -354,12 +407,13 @@ public class YourCustomPaintings {
                     for (int i=0; i<mapImgIn.getHeight(); i++) {
                         for (int j = 0; j < mapImgIn.getWidth(); j++) {
                             int w = mapImgIn.getWidth();
-                            boolean color = (pixels[i*w*4+j*4+0] & 0xFF) > 128;
-                            mapData[i*w+j] = color ? (byte)119 : 0;
-                            outPixels[i*w*4+j*4+0] = color ? (byte)255 : 0;
-                            outPixels[i*w*4+j*4+1] = 0;
-                            outPixels[i*w*4+j*4+2] = 0;
-                            outPixels[i*w*4+j*4+3] = 0;
+                            boolean opaque = (pixels[i*w*4+j*4+0] & 0xFF) > 128;
+                            int colorIndex = closestMapColorIndex(pixels[i*w*4+j*4+3]&0xFF, pixels[i*w*4+j*4+2]&0xFF, pixels[i*w*4+j*4+1]&0xFF);
+                            mapData[i*w+j] = opaque ? (byte)colorIndex : 0;
+                            outPixels[i*w*4+j*4+0] = opaque ? (byte)255 : 0;
+                            outPixels[i*w*4+j*4+3] = (byte) ((mapIndexedColors[colorIndex]>>16)&0xFF);
+                            outPixels[i*w*4+j*4+2] = (byte) ((mapIndexedColors[colorIndex]>>8)&0xFF);
+                            outPixels[i*w*4+j*4+1] = (byte) (mapIndexedColors[colorIndex]&0xFF);
                         }
                     }
                     PixelInterleavedSampleModel sampleModel = (PixelInterleavedSampleModel)mapImgOut.getRaster().getSampleModel();
@@ -439,10 +493,12 @@ public class YourCustomPaintings {
                 return true;
             })));
 
-            boolean b = futuresGetLastMapInd.get(0).get();
+            boolean success = futuresGetLastMapInd.get(0).get();
 
+            if (success)
+                params.getMessageChannel().send(Text.of("Painting was successfully uploaded!"));
+            else params.getMessageChannel().send(Text.of(TextColors.RED, "Upload of a painting failed!"));
 
-            params.getMessageChannel().send(Text.of("Success!"));
         } catch (InterruptedException | ExecutionException ex) {
             params.getMessageChannel().send(Text.of(TextColors.RED, "Upload of a painting was interrupted!"));
             logger.error("Upload of a painting was interrupted!", ex);
