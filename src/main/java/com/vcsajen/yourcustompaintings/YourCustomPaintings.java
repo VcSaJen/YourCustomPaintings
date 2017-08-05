@@ -3,7 +3,6 @@ package com.vcsajen.yourcustompaintings;
 import com.flowpowered.nbt.ByteArrayTag;
 import com.flowpowered.nbt.CompoundTag;
 import com.flowpowered.nbt.ShortTag;
-import com.flowpowered.nbt.Tag;
 import com.flowpowered.nbt.stream.NBTInputStream;
 import com.flowpowered.nbt.stream.NBTOutputStream;
 import com.google.common.reflect.TypeToken;
@@ -18,7 +17,6 @@ import ninja.leaping.configurate.objectmapping.ObjectMappingException;
 import org.slf4j.Logger;
 import org.spongepowered.api.Game;
 import org.spongepowered.api.Sponge;
-import org.spongepowered.api.command.CommandException;
 import org.spongepowered.api.command.CommandResult;
 import org.spongepowered.api.command.CommandSource;
 import org.spongepowered.api.command.args.CommandContext;
@@ -27,14 +25,12 @@ import org.spongepowered.api.command.spec.CommandSpec;
 import org.spongepowered.api.config.ConfigDir;
 import org.spongepowered.api.data.DataQuery;
 import org.spongepowered.api.data.DataView;
-import org.spongepowered.api.data.property.block.PassableProperty;
 import org.spongepowered.api.entity.living.player.Player;
 import org.spongepowered.api.event.Listener;
 import org.spongepowered.api.event.block.InteractBlockEvent;
 import org.spongepowered.api.event.filter.cause.Root;
 import org.spongepowered.api.event.game.state.GamePreInitializationEvent;
 import org.spongepowered.api.event.game.state.GameStartedServerEvent;
-import org.spongepowered.api.event.world.ConstructWorldPropertiesEvent;
 import org.spongepowered.api.item.ItemTypes;
 import org.spongepowered.api.item.inventory.ItemStack;
 import org.spongepowered.api.plugin.Plugin;
@@ -66,6 +62,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -94,6 +91,8 @@ public class YourCustomPaintings {
     private Path configDir;
 
     private YcpConfig myConfig;
+
+    ConcurrentHashMap<UUID, UserSession> sessions;
 
     @SuppressWarnings("WeakerAccess")
     private class UploadPaintingParams
@@ -771,6 +770,7 @@ public class YourCustomPaintings {
             logger.debug("URL is malformed!", ex);
         } catch (IOException ex) {
             params.getMessageChannel().send(Text.of(TextColors.RED, "Couldn't download image! Make sure you entered correct URL."));
+            params.getMessageChannel().send(Text.of(TextColors.RED, "(" + ex.getMessage() + ")"));
             logger.debug("IOException while uploading painting!", ex);
         } catch (ImageSizeLimitExceededException ex) {
             params.getMessageChannel().send(Text.of(TextColors.RED, ex.getMessage()));
@@ -782,11 +782,17 @@ public class YourCustomPaintings {
         finally {
             if (conn!=null)
                 ((HttpURLConnection)conn).disconnect();
+            UUID uuid = params.getCallerPlr().orElse(null);
+            if (uuid != null) {
+                UserSession userSession = sessions.get(uuid);
+                if (userSession!=null)
+                    userSession.getInProcess().set(false);
+            }
         }
     }
 
 
-    private CommandResult cmdMyTest(CommandSource cmdSource, CommandContext commandContext) {
+    private CommandResult cmdUpldPainting(CommandSource cmdSource, CommandContext commandContext) {
         String url = commandContext.<String>getOne("URL").get();
         int mapsX = commandContext.<Integer>getOne("MapsX").orElse(1);
         int mapsY = commandContext.<Integer>getOne("MapsY").orElse(1);
@@ -805,14 +811,33 @@ public class YourCustomPaintings {
         }
         colorBleedReduction = 1-colorBleedReduction/100;
 
-        cmdSource.sendMessage(Text.of("Downloading "+url+"…"));
+        UUID uuid = Player.class.isInstance(cmdSource) ? ((Player)cmdSource).getUniqueId() : null;
 
-        Task task = Task.builder().execute(new RunnableWithOneParam<UploadPaintingParams>(
-                new UploadPaintingParams(Player.class.isInstance(cmdSource) ? ((Player)cmdSource).getUniqueId() : null,
-                        cmdSource.getMessageChannel(), url, mapsX, mapsY, scaleMode, unsharpenMask,
-                        ditherMode, colorBleedReduction), this::runUploadPaintingTask))
-                .async()
-                .submit(myPlugin);
+        try {
+            if (uuid != null) {
+                sessions.putIfAbsent(uuid, new UserSession(false));
+                if (!sessions.get(uuid).getInProcess().compareAndSet(false, true)) {
+                    cmdSource.sendMessage(Text.of(TextColors.RED, "Already uploading another painting!"));
+                    return CommandResult.successCount(0);
+                }
+            }
+
+            cmdSource.sendMessage(Text.of("Downloading " + url + "…"));
+
+            Task task = Task.builder().execute(new RunnableWithOneParam<UploadPaintingParams>(
+                    new UploadPaintingParams(uuid,
+                            cmdSource.getMessageChannel(), url, mapsX, mapsY, scaleMode, unsharpenMask,
+                            ditherMode, colorBleedReduction), this::runUploadPaintingTask))
+                    .async()
+                    .submit(myPlugin);
+        } catch (Exception e) {
+            if (uuid != null) {
+                UserSession userSession = sessions.get(uuid);
+                if (userSession!=null)
+                    userSession.getInProcess().set(false);
+            }
+            throw e;
+        }
 
         cmdSource.getMessageChannel().send(Text.of("..."));
         return CommandResult.success();
@@ -865,7 +890,7 @@ public class YourCustomPaintings {
                         GenericArguments.optional(GenericArguments.enumValue(Text.of("UnsharpenMode"), UnsharpenMask.class), UnsharpenMask.None)*/,
                         GenericArguments.optional(GenericArguments.enumValue(Text.of("DitherMode"), DitherMode.class), DitherMode.FloydSteinberg),
                         GenericArguments.optional(GenericArguments.doubleNum(Text.of("ColorBleedReductionPercent")), 0.0d))
-                .executor(this::cmdMyTest)
+                .executor(this::cmdUpldPainting)
                 .build();
         game.getCommandManager().register(this, uploadPaintingCmdSpec, "uploadpainting", "up-p");
         //-----------
@@ -880,6 +905,7 @@ public class YourCustomPaintings {
             }
         }
         randomStringGenerator = new RandomStringGenerator(8);
+        sessions = new ConcurrentHashMap<>();
     }
 
     @Listener
