@@ -18,6 +18,7 @@ import ninja.leaping.configurate.objectmapping.ObjectMappingException;
 import org.slf4j.Logger;
 import org.spongepowered.api.Game;
 import org.spongepowered.api.Sponge;
+import org.spongepowered.api.command.CommandException;
 import org.spongepowered.api.command.CommandResult;
 import org.spongepowered.api.command.CommandSource;
 import org.spongepowered.api.command.args.CommandContext;
@@ -26,8 +27,11 @@ import org.spongepowered.api.command.spec.CommandSpec;
 import org.spongepowered.api.config.ConfigDir;
 import org.spongepowered.api.data.DataQuery;
 import org.spongepowered.api.data.DataView;
+import org.spongepowered.api.data.property.block.PassableProperty;
 import org.spongepowered.api.entity.living.player.Player;
 import org.spongepowered.api.event.Listener;
+import org.spongepowered.api.event.block.InteractBlockEvent;
+import org.spongepowered.api.event.filter.cause.Root;
 import org.spongepowered.api.event.game.state.GamePreInitializationEvent;
 import org.spongepowered.api.event.game.state.GameStartedServerEvent;
 import org.spongepowered.api.event.world.ConstructWorldPropertiesEvent;
@@ -42,8 +46,10 @@ import org.spongepowered.api.scheduler.SpongeExecutorService;
 import org.spongepowered.api.text.Text;
 import org.spongepowered.api.scheduler.Task;
 import org.spongepowered.api.text.channel.MessageChannel;
+import org.spongepowered.api.text.channel.MessageReceiver;
 import org.spongepowered.api.text.format.TextColors;
 
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import javax.imageio.ImageIO;
 import java.awt.*;
@@ -100,6 +106,8 @@ public class YourCustomPaintings {
         private int mapsY;
         private ScaleMode scaleMode;
         private AdvancedResizeOp.UnsharpenMask unsharpenMask;
+        private DitherMode ditherMode;
+        private double colorBleedReduction;
 
         public MessageChannel getMessageChannel() {
             return messageChannel;
@@ -129,7 +137,15 @@ public class YourCustomPaintings {
             return Optional.ofNullable(callerPlr);
         }
 
-        public UploadPaintingParams(@Nullable UUID callerPlr, MessageChannel messageChannel, String url, int mapsX, int mapsY, ScaleMode scaleMode, AdvancedResizeOp.UnsharpenMask unsharpenMask) {
+        public DitherMode getDitherMode() {
+            return ditherMode;
+        }
+
+        public double getColorBleedReduction() {
+            return colorBleedReduction;
+        }
+
+        public UploadPaintingParams(@Nullable UUID callerPlr, MessageChannel messageChannel, String url, int mapsX, int mapsY, ScaleMode scaleMode, AdvancedResizeOp.UnsharpenMask unsharpenMask, DitherMode ditherMode, double colorBleedReduction) {
             this.callerPlr = callerPlr;
             this.messageChannel = messageChannel;
             this.url = url;
@@ -137,6 +153,8 @@ public class YourCustomPaintings {
             this.mapsY = mapsY;
             this.scaleMode = scaleMode;
             this.unsharpenMask = unsharpenMask;
+            this.ditherMode = ditherMode;
+            this.colorBleedReduction = colorBleedReduction;
         }
     }
 
@@ -182,7 +200,198 @@ public class YourCustomPaintings {
         Hermite,
         Lanczos3,
         Mitchell,
-        Triangle
+        Triangle;
+
+        ResampleFilter getResampleFilter()
+        {
+            switch (this) {
+                case BSpline:
+                    return ResampleFilters.getBSplineFilter();
+                case Bell:
+                    return ResampleFilters.getBellFilter();
+                case BiCubic:
+                    return ResampleFilters.getBiCubicFilter();
+                case BiCubicHighFreqResponse:
+                    return ResampleFilters.getBiCubicHighFreqResponse();
+                case BoxFilter:
+                    return ResampleFilters.getBoxFilter();
+                case Hermite:
+                    return ResampleFilters.getHermiteFilter();
+                case Lanczos3:
+                    return ResampleFilters.getLanczos3Filter();
+                case Mitchell:
+                    return ResampleFilters.getMitchellFilter();
+                case Triangle:
+                    return ResampleFilters.getTriangleFilter();
+                default:
+                    throw new UnsupportedOperationException("Unsupported resample filter!");
+            }
+
+        }
+    }
+
+    private enum DitherMode {
+        NoDither,
+        FloydSteinberg,
+        JarvisJudiceNinke,
+        Stucki,
+        Atkinson,
+        Burkes,
+        Sierra3,
+        TwoRowSierra,
+        SierraLite,
+        OrderedBayer2x2,
+        OrderedBayer4x4,
+        OrderedBayer8x8,
+        OrderedBayer16x16;
+
+        boolean isEnabled()
+        {
+            return this!=NoDither;
+        }
+
+        boolean isOrdered()
+        {
+            switch (this)
+            {
+                case FloydSteinberg:
+                case JarvisJudiceNinke:
+                case Stucki:
+                case Atkinson:
+                case Burkes:
+                case Sierra3:
+                case TwoRowSierra:
+                case SierraLite:
+                    return false;
+                case OrderedBayer2x2:
+                case OrderedBayer4x4:
+                case OrderedBayer8x8:
+                case OrderedBayer16x16:
+                    return true;
+                default:
+                    throw new UnsupportedOperationException("Unknown/corrupted dither mode!");
+            }
+        }
+
+        double[][] getErrorDiffusionMatrix()
+        {
+            double[][] result;
+
+            switch (this)
+            {
+                case FloydSteinberg:
+                    result = new double[][] {
+                            {0,0,7},
+                            {3,5,1}};
+                    break;
+                case JarvisJudiceNinke:
+                    result = new double[][] {
+                            {0,0,0,7,5},
+                            {3,5,7,5,3},
+                            {1,3,5,3,1}};
+                    break;
+                case Stucki:
+                    result = new double[][] {
+                            {0,0,0,8,4},
+                            {2,4,8,4,2},
+                            {1,2,4,2,1}};
+                    break;
+                case Atkinson:
+                    result = new double[][] {
+                            {0,0,0,1,1},
+                            {0,1,1,1,0},
+                            {0,0,1,0,0}};
+                    break;
+                case Burkes:
+                    result = new double[][] {
+                            {0,0,0,8,4},
+                            {2,4,8,4,2}};
+                    break;
+                case Sierra3:
+                    result = new double[][] {
+                            {0,0,0,5,3},
+                            {2,4,5,4,2},
+                            {0,2,3,2,0}};
+                    break;
+                case TwoRowSierra:
+                    result = new double[][] {
+                            {0,0,0,4,3},
+                            {1,2,3,2,1}};
+                    break;
+                case SierraLite:
+                    result = new double[][] {
+                            {0,0,2},
+                            {1,1,0}};
+                    break;
+                default:
+                    throw new UnsupportedOperationException("Only error diffusion matrices supported, invalid dither mode");
+            }
+
+            int sum = 0;
+            for (double[] resulti : result)
+                for (double resultij : resulti)
+                    sum += resultij;
+            for (int i=0;i<result.length;i++)
+                for (int j=0;j<result[i].length;j++)
+                    result[i][j] /= sum;
+            return result;
+        }
+
+        double[][] getBayerMatrix() {
+            double[][] result;
+            switch (this)
+            {
+                case OrderedBayer2x2:
+                    result = new double[][] {
+                            {0, 2},
+                            {3, 1}};
+                    break;
+                case OrderedBayer4x4:
+                    result = new double[][] {
+                            {0, 8, 2, 10},
+                            {12,4, 14,6},
+                            {3, 11,1, 9},
+                            {15,7, 13,5}};
+                    break;
+                case OrderedBayer8x8:
+                    result = new double[][] {
+                            {0 , 48, 12, 60,  3, 51, 15, 63},
+                            {32, 16, 44, 28, 35, 19, 47, 31},
+                            {8 , 56,  4, 52, 11, 59,  7, 55},
+                            {40, 24, 36, 20, 43, 27, 39, 23},
+                            {2 , 50, 14, 62,  1, 49, 13, 61},
+                            {34, 18, 46, 30, 33, 17, 45, 29},
+                            {10, 58,  6, 54,  9, 57,  5, 53},
+                            {42, 26, 38, 22, 41, 25, 37, 21}};
+                    break;
+                case OrderedBayer16x16:
+                    result = new double[][] {
+                            {   0,192, 48,240, 12,204, 60,252,  3,195, 51,243, 15,207, 63,255 },
+                            { 128, 64,176,112,140, 76,188,124,131, 67,179,115,143, 79,191,127 },
+                            {  32,224, 16,208, 44,236, 28,220, 35,227, 19,211, 47,239, 31,223 },
+                            { 160, 96,144, 80,172,108,156, 92,163, 99,147, 83,175,111,159, 95 },
+                            {   8,200, 56,248,  4,196, 52,244, 11,203, 59,251,  7,199, 55,247 },
+                            { 136, 72,184,120,132, 68,180,116,139, 75,187,123,135, 71,183,119 },
+                            {  40,232, 24,216, 36,228, 20,212, 43,235, 27,219, 39,231, 23,215 },
+                            { 168,104,152, 88,164,100,148, 84,171,107,155, 91,167,103,151, 87 },
+                            {   2,194, 50,242, 14,206, 62,254,  1,193, 49,241, 13,205, 61,253 },
+                            { 130, 66,178,114,142, 78,190,126,129, 65,177,113,141, 77,189,125 },
+                            {  34,226, 18,210, 46,238, 30,222, 33,225, 17,209, 45,237, 29,221 },
+                            { 162, 98,146, 82,174,110,158, 94,161, 97,145, 81,173,109,157, 93 },
+                            {  10,202, 58,250,  6,198, 54,246,  9,201, 57,249,  5,197, 53,245 },
+                            { 138, 74,186,122,134, 70,182,118,137, 73,185,121,133, 69,181,117 },
+                            {  42,234, 26,218, 38,230, 22,214, 41,233, 25,217, 37,229, 21,213 },
+                            { 170,106,154, 90,166,102,150, 86,169,105,153, 89,165,101,149, 85 }};
+                    break;
+                default:
+                    throw new UnsupportedOperationException("Only ordered dither matrices supported, invalid dither mode");
+            }
+            double divider = result.length*result[0].length;
+            for (int i=0;i<result.length;i++)
+                for (int j=0;j<result[i].length;j++)
+                    result[i][j] /= divider;
+            return result;
+        }
     }
 
     private final int[] mapIndexedColors = {0x00000000, 0x00000000, 0x00000000, 0x00000000, 0xFF5A7E28, 0xFF6E9A30, 0xFF7FB238, 0xFF435E1E,
@@ -265,8 +474,13 @@ public class YourCustomPaintings {
         return closestIndex;
     }
 
+    int constrainInt(int val, int min, int max)
+    {
+        if (val < min) return min;
+        return val>max ? max : val;
+    }
 
-    private void runUploadPaintingTask(UploadPaintingParams params) {
+    private void runUploadPaintingTask(@Nonnull UploadPaintingParams params) {
         SpongeExecutorService minecraftExecutor = Sponge.getScheduler().createSyncExecutor(myPlugin);
         URLConnection conn = null;
         try {
@@ -324,41 +538,10 @@ public class YourCustomPaintings {
             if (params.getScaleMode()!=ScaleMode.NoScale) {
                 ResampleOp resampleOp = new ResampleOp(rawScaledImg.getWidth(), rawScaledImg.getHeight());
                 resampleOp.setUnsharpenMask(params.getUnsharpenMask());
-                ResampleFilter filter = ResampleFilters.getLanczos3Filter();
-                switch (params.getScaleMode()) {
-                    case BSpline:
-                        filter = ResampleFilters.getBSplineFilter();
-                        break;
-                    case Bell:
-                        filter = ResampleFilters.getBellFilter();
-                        break;
-                    case BiCubic:
-                        filter = ResampleFilters.getBiCubicFilter();
-                        break;
-                    case BiCubicHighFreqResponse:
-                        filter = ResampleFilters.getBiCubicHighFreqResponse();
-                        break;
-                    case BoxFilter:
-                        filter = ResampleFilters.getBoxFilter();
-                        break;
-                    case Hermite:
-                        filter = ResampleFilters.getHermiteFilter();
-                        break;
-                    case Lanczos3:
-                        filter = ResampleFilters.getLanczos3Filter();
-                        break;
-                    case Mitchell:
-                        filter = ResampleFilters.getMitchellFilter();
-                        break;
-                    case Triangle:
-                        filter = ResampleFilters.getTriangleFilter();
-                        break;
-                }
+                ResampleFilter filter = params.getScaleMode().getResampleFilter();
                 resampleOp.setFilter(filter);
                 resampleOp.filter(img, rawScaledImg);
                 printImgInCenter(scaledImg, rawScaledImg);
-
-
             } else {
                 printImgInCenter(scaledImg, img);
             }
@@ -375,6 +558,92 @@ public class YourCustomPaintings {
             }
 
             params.getMessageChannel().send(Text.of("Converting to map palette…"));
+
+            byte[][] nontiledMapData = new byte[scaledImg.getWidth()][scaledImg.getHeight()];
+
+            {
+                byte[] nontiledMapPixels = ((DataBufferByte) scaledImg.getRaster().getDataBuffer()).getData();
+
+                if (!params.getDitherMode().isEnabled()) {
+                    for (int i = 0; i < scaledImg.getHeight(); i++) {
+                        for (int j = 0; j < scaledImg.getWidth(); j++) {
+                            int w = scaledImg.getWidth();
+                            boolean opaque = (nontiledMapPixels[i * w * 4 + j * 4 + 0] & 0xFF) > 128;
+                            int colorIndex = closestMapColorIndex(nontiledMapPixels[i * w * 4 + j * 4 + 3] & 0xFF, nontiledMapPixels[i * w * 4 + j * 4 + 2] & 0xFF, nontiledMapPixels[i * w * 4 + j * 4 + 1] & 0xFF);
+                            nontiledMapData[j][i] = opaque ? (byte) colorIndex : 0;
+                        }
+                    }
+                } else {
+                    if (params.getDitherMode().isOrdered()) {
+                        double[][] bayerMatrix = params.getDitherMode().getBayerMatrix();
+
+                        for (int i = 0; i < scaledImg.getHeight(); i++) {
+                            for (int j = 0; j < scaledImg.getWidth(); j++) {
+                                int w = scaledImg.getWidth();
+                                boolean opaque = (nontiledMapPixels[i * w * 4 + j * 4 + 0] & 0xFF) > 128;
+
+                                if (opaque) {
+                                    double map_value = bayerMatrix[i % bayerMatrix.length][j % bayerMatrix[0].length];
+                                    //MixingPlan plan = DeviseBestMixingPlan(nontiledMapPixels[i * w * 4 + j * 4 + 3] & 0xFF, nontiledMapPixels[i * w * 4 + j * 4 + 2] & 0xFF, nontiledMapPixels[i * w * 4 + j * 4 + 1] & 0xFF);
+                                    //int colorIndex = plan.colors[map_value < plan.ratio ? 1 : 0];
+                                    int R = nontiledMapPixels[i * w * 4 + j * 4 + 3] & 0xFF;
+                                    int G = nontiledMapPixels[i * w * 4 + j * 4 + 2] & 0xFF;
+                                    int B = nontiledMapPixels[i * w * 4 + j * 4 + 1] & 0xFF;
+                                    int newR = (int)Math.round(R + (256/6.5) * (map_value-0.5));  // This is really bad for indexed palette,
+                                    int newG = (int)Math.round(G + (256/7.0) * (map_value-0.5));  // and not really optimized for it, but it
+                                    int newB = (int)Math.round(B + (256/12.5) * (map_value-0.5)); // will make do. Yliluoma1 is too slow for
+                                    int colorIndex = closestMapColorIndex(newR, newG, newB);      // our purposes anyway.
+                                    nontiledMapData[j][i] = (byte) colorIndex;
+                                } else nontiledMapData[j][i] = 0;
+                                /*
+                                double map_value = map[(x & 7) + ((y & 7) << 3)];
+                                unsigned color = gdImageGetTrueColorPixel(srcim, x, y);
+                                MixingPlan plan = DeviseBestMixingPlan(color);
+                                gdImageSetPixel(im, x,y, plan.colors[ map_value < plan.ratio ? 1 : 0 ] );
+                                */
+                            }
+                        }
+                    } else { //error-diffusion
+                        double[][] errorDiffusionMatrix = params.getDitherMode().getErrorDiffusionMatrix();
+                        double[][] errorsR = new double[scaledImg.getHeight()][scaledImg.getWidth()];
+                        double[][] errorsG = new double[scaledImg.getHeight()][scaledImg.getWidth()];
+                        double[][] errorsB = new double[scaledImg.getHeight()][scaledImg.getWidth()];
+
+                        for (int i = 0; i < scaledImg.getHeight(); i++) {
+                            for (int j = 0; j < scaledImg.getWidth(); j++) {
+                                int w = scaledImg.getWidth();
+                                boolean opaque = (nontiledMapPixels[i * w * 4 + j * 4 + 0] & 0xFF) > 128;
+
+                                if (opaque) {
+                                    int R = constrainInt((nontiledMapPixels[i * w * 4 + j * 4 + 3] & 0xFF) + (int) Math.round(errorsR[i][j]), 0, 255);
+                                    int G = constrainInt((nontiledMapPixels[i * w * 4 + j * 4 + 2] & 0xFF) + (int) Math.round(errorsG[i][j]), 0, 255);
+                                    int B = constrainInt((nontiledMapPixels[i * w * 4 + j * 4 + 1] & 0xFF) + (int) Math.round(errorsB[i][j]), 0, 255);
+                                    int colorIndex = closestMapColorIndex(R, G, B);
+                                    int newR = (mapIndexedColors[colorIndex] >> 16) & 0xFF;
+                                    int newG = (mapIndexedColors[colorIndex] >> 8) & 0xFF;
+                                    int newB = mapIndexedColors[colorIndex] & 0xFF;
+                                    int errR = R - newR;
+                                    int errG = G - newG;
+                                    int errB = B - newB;
+                                    for (int g = 0; g < errorDiffusionMatrix.length; g++) {
+                                        for (int h = 0; h < errorDiffusionMatrix[g].length; h++) {
+                                            int y = i+g;
+                                            int x = j-(errorDiffusionMatrix[g].length-1)/2+h;
+                                            if (y>=errorsR.length || x<0 || x>=errorsR[i].length) continue;
+                                            errorsR[y][x] += errR * params.getColorBleedReduction() * errorDiffusionMatrix[g][h];
+                                            errorsG[y][x] += errG * params.getColorBleedReduction() * errorDiffusionMatrix[g][h];
+                                            errorsB[y][x] += errB * params.getColorBleedReduction() * errorDiffusionMatrix[g][h];
+                                        }
+                                    }
+                                    nontiledMapData[j][i] = (byte) colorIndex;
+                                } else nontiledMapData[j][i] = 0;
+                            }
+                        }
+                    }
+                }
+
+            }
+
             final String tmpId = randomStringGenerator.generate();
             final Path dataFolder = Sponge.getGame().getSavesDirectory().resolve(Sponge.getServer().getDefaultWorldName()).resolve("data");
 
@@ -391,26 +660,16 @@ public class YourCustomPaintings {
 
             for (int k=0; k<params.getMapsX(); k++) {
                 for (int l=0; l<params.getMapsY(); l++) {
-                    //BufferedImage mapImgIn = scaledImg.getSubimage(k*128,l*128,128,128);
-                    BufferedImage mapImgIn = new BufferedImage(128, 128, BufferedImage.TYPE_4BYTE_ABGR);
-                    Graphics2D mapImgInGraphics = mapImgIn.createGraphics();
-                    //Color oldColor = mapImgInGraphics.getColor();
-                    //mapImgInGraphics.setPaint(new Color(255,255,255,0));
-                    //mapImgInGraphics.fillRect(0, 0, mapImgIn.getWidth(), mapImgIn.getHeight());
-                    //mapImgInGraphics.setColor(oldColor);
-                    mapImgInGraphics.drawImage(scaledImg, -k*128, -l*128, null);
-                    mapImgInGraphics.dispose();
                     BufferedImage mapImgOut = new BufferedImage(128, 128, BufferedImage.TYPE_4BYTE_ABGR);
-                    byte[] pixels = ((DataBufferByte) mapImgIn.getRaster().getDataBuffer()).getData();
                     byte[] outPixels = ((DataBufferByte) mapImgOut.getRaster().getDataBuffer()).getData();
 
-                    for (int i=0; i<mapImgIn.getHeight(); i++) {
-                        for (int j = 0; j < mapImgIn.getWidth(); j++) {
-                            int w = mapImgIn.getWidth();
-                            boolean opaque = (pixels[i*w*4+j*4+0] & 0xFF) > 128;
-                            int colorIndex = closestMapColorIndex(pixels[i*w*4+j*4+3]&0xFF, pixels[i*w*4+j*4+2]&0xFF, pixels[i*w*4+j*4+1]&0xFF);
-                            mapData[i*w+j] = opaque ? (byte)colorIndex : 0;
-                            outPixels[i*w*4+j*4+0] = opaque ? (byte)255 : 0;
+                    for (int i=0; i<128; i++) {
+                        for (int j = 0; j < 128; j++) {
+                            int w = 128;
+                            //boolean opaque = (pixels[i*w*4+j*4+0] & 0xFF) > 128;
+                            int colorIndex = nontiledMapData[k*128+j][l*128+i] & 0xFF;
+                            mapData[i*w+j] = (byte)colorIndex;
+                            outPixels[i*w*4+j*4+0] = (byte) (mapIndexedColors[colorIndex]>>24);
                             outPixels[i*w*4+j*4+3] = (byte) ((mapIndexedColors[colorIndex]>>16)&0xFF);
                             outPixels[i*w*4+j*4+2] = (byte) ((mapIndexedColors[colorIndex]>>8)&0xFF);
                             outPixels[i*w*4+j*4+1] = (byte) (mapIndexedColors[colorIndex]&0xFF);
@@ -439,6 +698,7 @@ public class YourCustomPaintings {
                     try (OutputStream fos = new FileOutputStream(fileName.toFile());
                          NBTOutputStream nbtOutputStream = new NBTOutputStream(fos, true)) {
                         nbtOutputStream.writeTag(root);
+                        nbtOutputStream.flush();
                     }
                 }
             }
@@ -447,7 +707,9 @@ public class YourCustomPaintings {
                     new RegisterMapParams(params.getCallerPlr().orElse(null), params.getMessageChannel(), tmpId, params.getMapsX()*params.getMapsY()), regMapParams -> {
                 params.getMessageChannel().send(Text.of("Generating map…"));
                 try {
-                    Path idCountsPath = dataFolder.resolve("idcounts.dat");
+                    int safeSpaceCount = 500;
+
+                    Path idCountsPath = dataFolder.resolve("idcounts_YCP.dat");
                     if (Files.notExists(idCountsPath))
                         myPlugin.getAsset("idcounts.dat").orElseThrow(() -> new IOException("Asset idcounts.dat not found"))
                                 .copyToFile(idCountsPath);
@@ -458,15 +720,17 @@ public class YourCustomPaintings {
                         root = (CompoundTag) nbtInputStream.readTag();
                     }
                     final int lastMapId = ((ShortTag)root.getValue().get("map")).getValue();
-                    if (lastMapId+regMapParams.getTileCount()>Short.MAX_VALUE) {
+
+                    if (lastMapId+regMapParams.getTileCount()+safeSpaceCount>Short.MAX_VALUE) {
                         regMapParams.getMessageChannel().send(Text.of(TextColors.RED, "Map ID limit exceed! (projected: "+(lastMapId+regMapParams.getTileCount())+", max: "+Short.MAX_VALUE+")"));
                         return false;
                     }
                     root.getValue().put(new ShortTag("map", (short)(lastMapId+regMapParams.getTileCount())));
+                    final int calcLastMapId = Short.MAX_VALUE - safeSpaceCount - lastMapId - regMapParams.getTileCount();
 
                     for (int i=0;i<regMapParams.getTileCount();i++) {
                         Path mapFileName = dataFolder.resolve("map_tmp_"+tmpId+"_"+i+".dat");
-                        Path newMapFileName = dataFolder.resolve("map_"+(lastMapId+1+i)+".dat");
+                        Path newMapFileName = dataFolder.resolve("map_"+(calcLastMapId+1+i)+".dat");
                         Files.move(mapFileName, newMapFileName, StandardCopyOption.REPLACE_EXISTING);
                     }
 
@@ -479,7 +743,7 @@ public class YourCustomPaintings {
                             for (int i=0;i<regMapParams.getTileCount();i++) {
                                 ItemStack itemStack = ItemStack.builder().itemType(ItemTypes.FILLED_MAP).quantity(1).build();
                                 DataView rawData = itemStack.toContainer();
-                                rawData.set(DataQuery.of("UnsafeDamage"), lastMapId+1+i);
+                                rawData.set(DataQuery.of("UnsafeDamage"), calcLastMapId+1+i);
                                 itemStack = ItemStack.builder().fromContainer(rawData).build();
                                 player.getInventory().offer(itemStack);
                             }
@@ -528,11 +792,25 @@ public class YourCustomPaintings {
         int mapsY = commandContext.<Integer>getOne("MapsY").orElse(1);
         ScaleMode scaleMode = commandContext.<ScaleMode>getOne("ScaleMode").get();
         AdvancedResizeOp.UnsharpenMask unsharpenMask = commandContext.<AdvancedResizeOp.UnsharpenMask>getOne("UnsharpenMode").orElse(AdvancedResizeOp.UnsharpenMask.None);
+        DitherMode ditherMode = commandContext.<DitherMode>getOne("DitherMode").get();
+        /*if (commandContext.<Double>getOne("ColorBleedReductionPercent").isPresent() &&
+                (!ditherMode.isEnabled() || ditherMode.isOrdered())) {
+            cmdSource.sendMessage(Text.of(TextColors.RED, "Error! ColorBleedReductionPercent only needed if you use DitherMode with one of error diffusion modes"));
+            return CommandResult.successCount(0);
+        }*/
+        double colorBleedReduction = commandContext.<Double>getOne("ColorBleedReductionPercent").orElse(0.0);
+        if (colorBleedReduction<-0.000001 || colorBleedReduction>(100.000001)) {
+            cmdSource.sendMessage(Text.of(TextColors.RED, "Error! ColorBleedReductionPercent must be between 0.0 and 100.0!"));
+            return CommandResult.successCount(0);
+        }
+        colorBleedReduction = 1-colorBleedReduction/100;
 
         cmdSource.sendMessage(Text.of("Downloading "+url+"…"));
 
         Task task = Task.builder().execute(new RunnableWithOneParam<UploadPaintingParams>(
-                new UploadPaintingParams(Player.class.isInstance(cmdSource) ? ((Player)cmdSource).getUniqueId() : null, cmdSource.getMessageChannel(), url, mapsX, mapsY, scaleMode, unsharpenMask), this::runUploadPaintingTask))
+                new UploadPaintingParams(Player.class.isInstance(cmdSource) ? ((Player)cmdSource).getUniqueId() : null,
+                        cmdSource.getMessageChannel(), url, mapsX, mapsY, scaleMode, unsharpenMask,
+                        ditherMode, colorBleedReduction), this::runUploadPaintingTask))
                 .async()
                 .submit(myPlugin);
 
@@ -541,8 +819,17 @@ public class YourCustomPaintings {
     }
 
     @Listener
-    public void onConstructWorld(ConstructWorldPropertiesEvent event) {
-        logger.debug("Saves directory: "+String.valueOf(game.getSavesDirectory()));
+    public void onInteractBlockEvent(InteractBlockEvent.Secondary event, @Root MessageReceiver eventSrc) {
+        //logger.debug("Saves directory: "+String.valueOf(game.getSavesDirectory()));
+        /*if(event.getTargetBlock().getProperty(PassableProperty.class).isPresent())
+        {
+            //PassableProperty isPassable = event.getTargetBlock().getProperty(PassableProperty.class).get();
+            PassableProperty isPassable = event.getTargetBlock().getProperty(PassableProperty.class).get();
+            eventSrc.getMessageChannel().send(Text.of(event.getClass().getName()));
+            eventSrc.getMessageChannel().send(Text.of("Passable: " + isPassable.getValue()));
+        }*/
+
+
     }
 
     @Listener
@@ -575,7 +862,9 @@ public class YourCustomPaintings {
                 .arguments(GenericArguments.string(Text.of("URL")),
                         GenericArguments.optional(GenericArguments.seq(GenericArguments.integer(Text.of("MapsX")), GenericArguments.integer(Text.of("MapsY")))),
                         GenericArguments.optional(GenericArguments.enumValue(Text.of("ScaleMode"), ScaleMode.class), ScaleMode.Lanczos3)/*,
-                        GenericArguments.optional(GenericArguments.enumValue(Text.of("UnsharpenMode"), UnsharpenMask.class), UnsharpenMask.None)*/)
+                        GenericArguments.optional(GenericArguments.enumValue(Text.of("UnsharpenMode"), UnsharpenMask.class), UnsharpenMask.None)*/,
+                        GenericArguments.optional(GenericArguments.enumValue(Text.of("DitherMode"), DitherMode.class), DitherMode.FloydSteinberg),
+                        GenericArguments.optional(GenericArguments.doubleNum(Text.of("ColorBleedReductionPercent")), 0.0d))
                 .executor(this::cmdMyTest)
                 .build();
         game.getCommandManager().register(this, uploadPaintingCmdSpec, "uploadpainting", "up-p");
