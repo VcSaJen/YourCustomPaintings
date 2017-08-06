@@ -29,6 +29,7 @@ import org.spongepowered.api.entity.living.player.Player;
 import org.spongepowered.api.event.Listener;
 import org.spongepowered.api.event.block.InteractBlockEvent;
 import org.spongepowered.api.event.filter.cause.Root;
+import org.spongepowered.api.event.game.GameReloadEvent;
 import org.spongepowered.api.event.game.state.GamePreInitializationEvent;
 import org.spongepowered.api.event.game.state.GameStartedServerEvent;
 import org.spongepowered.api.item.ItemTypes;
@@ -39,6 +40,8 @@ import org.spongepowered.api.config.DefaultConfig;
 import ninja.leaping.configurate.commented.CommentedConfigurationNode;
 import ninja.leaping.configurate.loader.ConfigurationLoader;
 import org.spongepowered.api.scheduler.SpongeExecutorService;
+import org.spongepowered.api.service.permission.PermissionDescription;
+import org.spongepowered.api.service.permission.PermissionService;
 import org.spongepowered.api.text.Text;
 import org.spongepowered.api.scheduler.Task;
 import org.spongepowered.api.text.channel.MessageChannel;
@@ -107,6 +110,11 @@ public class YourCustomPaintings {
         private AdvancedResizeOp.UnsharpenMask unsharpenMask;
         private DitherMode ditherMode;
         private double colorBleedReduction;
+        private int maxImgFileSize;
+        private int maxImgW;
+        private int maxImgH;
+        private boolean debugMode;
+        private int progressReportTime;
 
         public MessageChannel getMessageChannel() {
             return messageChannel;
@@ -144,7 +152,27 @@ public class YourCustomPaintings {
             return colorBleedReduction;
         }
 
-        public UploadPaintingParams(@Nullable UUID callerPlr, MessageChannel messageChannel, String url, int mapsX, int mapsY, ScaleMode scaleMode, AdvancedResizeOp.UnsharpenMask unsharpenMask, DitherMode ditherMode, double colorBleedReduction) {
+        public int getMaxImgFileSize() {
+            return maxImgFileSize;
+        }
+
+        public int getMaxImgW() {
+            return maxImgW;
+        }
+
+        public int getMaxImgH() {
+            return maxImgH;
+        }
+
+        public boolean isDebugMode() {
+            return debugMode;
+        }
+
+        public int getProgressReportTime() {
+            return progressReportTime;
+        }
+
+        public UploadPaintingParams(@Nullable UUID callerPlr, MessageChannel messageChannel, String url, int mapsX, int mapsY, ScaleMode scaleMode, AdvancedResizeOp.UnsharpenMask unsharpenMask, DitherMode ditherMode, double colorBleedReduction, int maxImgFileSize, int maxImgW, int maxImgH, boolean debugMode, int progressReportTime) {
             this.callerPlr = callerPlr;
             this.messageChannel = messageChannel;
             this.url = url;
@@ -154,6 +182,11 @@ public class YourCustomPaintings {
             this.unsharpenMask = unsharpenMask;
             this.ditherMode = ditherMode;
             this.colorBleedReduction = colorBleedReduction;
+            this.maxImgFileSize = maxImgFileSize;
+            this.maxImgW = maxImgW;
+            this.maxImgH = maxImgH;
+            this.debugMode = debugMode;
+            this.progressReportTime = progressReportTime;
         }
     }
 
@@ -491,21 +524,21 @@ public class YourCustomPaintings {
             conn = url.openConnection();
             // now you get the content length
             int cLength = conn.getContentLength();
-            if (cLength > myConfig.getMaxImgFileSize()) throw new ImageSizeLimitExceededException();
+            if (cLength > params.getMaxImgFileSize()) throw new ImageSizeLimitExceededException();
             long startTimer = System.nanoTime();
-            //byte[] outBytes = new byte[myConfig.getMaxImgFileSize()];
+            //byte[] outBytes = new byte[params.getMaxImgFileSize()];
             try (InputStream httpStream = conn.getInputStream();
                  ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream())
             {
-                //int readBytesCount = httpStream.read(outBytes, 0, myConfig.getMaxImgFileSize());
+                //int readBytesCount = httpStream.read(outBytes, 0, params.getMaxImgFileSize());
                 int nRead;
                 byte[] data = new byte[16384];
                 while ((nRead = httpStream.read(data, 0, data.length)) != -1) {
                     byteArrayOutputStream.write(data, 0, nRead);
-                    if (byteArrayOutputStream.size() > myConfig.getMaxImgFileSize())
+                    if (byteArrayOutputStream.size() > params.getMaxImgFileSize())
                         throw new ImageSizeLimitExceededException();
                     long endTimer = System.nanoTime();
-                    if (TimeUnit.NANOSECONDS.toMillis(endTimer - startTimer) >= myConfig.getProgressReportTime()) {
+                    if (TimeUnit.NANOSECONDS.toMillis(endTimer - startTimer) >= params.getProgressReportTime()) {
                         startTimer = endTimer;
                         params.getMessageChannel().send(Text.of("Image download progress: " + (cLength>0 ? (100*byteArrayOutputStream.size()/cLength + "%") : (byteArrayOutputStream.size()+" bytes"))));
                     }
@@ -544,7 +577,7 @@ public class YourCustomPaintings {
             } else {
                 printImgInCenter(scaledImg, img);
             }
-            if (myConfig.isDebugMode()) {
+            if (params.isDebugMode()) {
                 ImageIO.write(scaledImg, "png", dbgDir.resolve("zzz_scaled_fullcolor_nontiled_img.png").toFile());
 
                 File[] tmpTileImgFiles = (dbgDir.toFile().listFiles((dir, name) -> name.matches( "scaled_mapcolor_tile_.*_img\\.png" )));
@@ -675,7 +708,7 @@ public class YourCustomPaintings {
                         }
                     }
                     PixelInterleavedSampleModel sampleModel = (PixelInterleavedSampleModel)mapImgOut.getRaster().getSampleModel();
-                    if (myConfig.isDebugMode()) {
+                    if (params.isDebugMode()) {
                         mapImgOut = new BufferedImage(mapImgOut.getColorModel(),
                                 Raster.createInterleavedRaster(new DataBufferByte(outPixels, outPixels.length), mapImgOut.getWidth(), mapImgOut.getHeight(), sampleModel.getScanlineStride(), sampleModel.getPixelStride(), sampleModel.getBandOffsets(), null),
                                 mapImgOut.isAlphaPremultiplied(),
@@ -743,6 +776,9 @@ public class YourCustomPaintings {
                                 ItemStack itemStack = ItemStack.builder().itemType(ItemTypes.FILLED_MAP).quantity(1).build();
                                 DataView rawData = itemStack.toContainer();
                                 rawData.set(DataQuery.of("UnsafeDamage"), calcLastMapId+1+i);
+                                rawData.set(DataQuery.of("UnsafeData", "display", "LocName"), "item.painting.name");
+                                rawData.set(DataQuery.of("UnsafeData", "display", "MapColor"), 16744576);
+
                                 itemStack = ItemStack.builder().fromContainer(rawData).build();
                                 player.getInventory().offer(itemStack);
                             }
@@ -791,7 +827,6 @@ public class YourCustomPaintings {
         }
     }
 
-
     private CommandResult cmdUpldPainting(CommandSource cmdSource, CommandContext commandContext) {
         String url = commandContext.<String>getOne("URL").get();
         int mapsX = commandContext.<Integer>getOne("MapsX").orElse(1);
@@ -811,6 +846,28 @@ public class YourCustomPaintings {
         }
         colorBleedReduction = 1-colorBleedReduction/100;
 
+        int maxMapsX = 128;
+        int maxMapsY = 128;
+        int maxPaintingW = 8192;
+        int maxPaintingH = 8192;
+        int maxImgFileSize = myConfig.getMaxImgFileSize();
+        if (Player.class.isInstance(cmdSource)) {
+            Player player = (Player)cmdSource;
+            try {
+                maxMapsX = Integer.valueOf(player.getOption("yourcustompaintings.commands.uploadpainting.max.maps.x").orElse(Integer.toString(maxMapsX)));
+                maxMapsY = Integer.valueOf(player.getOption("yourcustompaintings.commands.uploadpainting.max.maps.y").orElse(Integer.toString(maxMapsY)));
+                maxImgFileSize = Integer.valueOf(player.getOption("yourcustompaintings.commands.uploadpainting.max.imgfilesize").orElse(Integer.toString(maxImgFileSize)));
+                maxPaintingW = Integer.valueOf(player.getOption("yourcustompaintings.commands.uploadpainting.max.imgwidth").orElse(Integer.toString(maxPaintingW)));
+                maxPaintingH = Integer.valueOf(player.getOption("yourcustompaintings.commands.uploadpainting.max.imgheight").orElse(Integer.toString(maxPaintingH)));
+            } catch (NumberFormatException e) {
+                logger.warn("Warning: player options for player "+player.getName()+" have syntax errors!");
+            }
+        }
+        if (mapsX <= 0 || mapsX > maxMapsX || mapsY <= 0 || mapsY > maxMapsY) {
+            cmdSource.sendMessage(Text.of(TextColors.RED, "Error! MapsX/MapsY should be positive and "+maxMapsX+"x"+maxMapsY+" max!"));
+            return CommandResult.successCount(0);
+        }
+
         UUID uuid = Player.class.isInstance(cmdSource) ? ((Player)cmdSource).getUniqueId() : null;
 
         try {
@@ -827,7 +884,8 @@ public class YourCustomPaintings {
             Task task = Task.builder().execute(new RunnableWithOneParam<UploadPaintingParams>(
                     new UploadPaintingParams(uuid,
                             cmdSource.getMessageChannel(), url, mapsX, mapsY, scaleMode, unsharpenMask,
-                            ditherMode, colorBleedReduction), this::runUploadPaintingTask))
+                            ditherMode, colorBleedReduction, maxImgFileSize, maxPaintingW, maxPaintingH,
+                            myConfig.isDebugMode(), myConfig.getProgressReportTime()), this::runUploadPaintingTask))
                     .async()
                     .submit(myPlugin);
         } catch (Exception e) {
@@ -857,10 +915,8 @@ public class YourCustomPaintings {
 
     }
 
-    @Listener
-    public void onInit(GamePreInitializationEvent event) {
-        //-----------
-        //Config registration
+    private void loadConfig()
+    {
         ConfigurationNode rootNode;
         try {
             rootNode = configManager.load();
@@ -879,6 +935,14 @@ public class YourCustomPaintings {
         } catch (ObjectMappingException e) {
             logger.error("Some Configurate mapping exception. This shouldn't happen", e);
         }
+    }
+
+    @Listener
+    public void onInit(GamePreInitializationEvent event) {
+        //-----------
+        //Config registration
+        loadConfig();
+
         //-----------
         //Command registration
         CommandSpec uploadPaintingCmdSpec = CommandSpec.builder()
@@ -890,9 +954,23 @@ public class YourCustomPaintings {
                         GenericArguments.optional(GenericArguments.enumValue(Text.of("UnsharpenMode"), UnsharpenMask.class), UnsharpenMask.None)*/,
                         GenericArguments.optional(GenericArguments.enumValue(Text.of("DitherMode"), DitherMode.class), DitherMode.FloydSteinberg),
                         GenericArguments.optional(GenericArguments.doubleNum(Text.of("ColorBleedReductionPercent")), 0.0d))
+                .permission("yourcustompaintings.commands.uploadpainting.execute")
                 .executor(this::cmdUpldPainting)
                 .build();
         game.getCommandManager().register(this, uploadPaintingCmdSpec, "uploadpainting", "up-p");
+        //-----------
+        //Permission descriptions
+
+        PermissionDescription.Builder pdBuilder = Sponge.getServiceManager().provide(PermissionService.class).flatMap(
+                permissionService -> permissionService.newDescriptionBuilder(myPlugin)).orElse(null);
+
+
+        if (pdBuilder!=null) {
+            pdBuilder.id("yourcustompaintings.commands.uploadpainting.execute")
+                    .description(Text.of("Allows the user to execute the uploadpainting command."))
+                    .assign(PermissionDescription.ROLE_STAFF, true)
+                    .register();
+        }
         //-----------
         //Other
         dbgDir = configDir.resolve("debug");
@@ -913,9 +991,16 @@ public class YourCustomPaintings {
         // Hey! The server has started!
         // Try instantiating your logger in here.
         // (There's a guide for that)
-        logger.debug("*************************");
-        logger.debug("HI! MY PLUGIN IS WORKING!");
-        logger.debug("*************************");
-        logger.debug("MaxImgFileSize: "+myConfig.getMaxImgFileSize());
+        if (myConfig.isDebugMode()) {
+            logger.debug("*************************");
+            logger.debug("HI! MY PLUGIN IS WORKING!");
+            logger.debug("*************************");
+            logger.debug("MaxImgFileSize: " + myConfig.getMaxImgFileSize());
+        }
+    }
+
+    @Listener
+    public void onGameReload(GameReloadEvent event) {
+        loadConfig();
     }
 }
