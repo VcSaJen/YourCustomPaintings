@@ -9,7 +9,9 @@ import com.google.common.reflect.TypeToken;
 import com.google.inject.Inject;
 import com.mortennobel.imagescaling.*;
 import com.mortennobel.imagescaling.AdvancedResizeOp;
+import com.vcsajen.yourcustompaintings.exceptions.ImageDimensionsExceedException;
 import com.vcsajen.yourcustompaintings.exceptions.ImageSizeLimitExceededException;
+import com.vcsajen.yourcustompaintings.exceptions.NotImageException;
 import com.vcsajen.yourcustompaintings.util.CallableWithOneParam;
 import com.vcsajen.yourcustompaintings.util.RunnableWithOneParam;
 import ninja.leaping.configurate.ConfigurationNode;
@@ -51,6 +53,8 @@ import org.spongepowered.api.text.format.TextColors;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
 import java.awt.*;
 import java.awt.image.*;
 import java.io.*;
@@ -61,10 +65,8 @@ import java.net.URLConnection;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.util.Collections;
+import java.util.*;
 import java.util.List;
-import java.util.Optional;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -549,10 +551,31 @@ public class YourCustomPaintings {
 
                 try (ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(byteArrayOutputStream.toByteArray()))
                 {
+                    // Getting and checking dimensions without reading whole file (PNG bomb protection)
+                    try (ImageInputStream input = ImageIO.createImageInputStream(byteArrayInputStream)) {
+                        final Iterator<ImageReader> readers = ImageIO.getImageReaders(input);
+                        if (readers.hasNext()) {
+                            ImageReader reader = readers.next();
+                            try {
+                                reader.setInput(input);
+                                // Get dimensions of first image in the stream, without decoding pixel values
+                                int width = reader.getWidth(0);
+                                int height = reader.getHeight(0);
+                                if (width>params.getMaxImgW() || height>params.getMaxImgH())
+                                    throw new ImageDimensionsExceedException(width, height, params.getMaxImgW(), params.getMaxImgH());
+                            } finally {
+                                reader.dispose();
+                            }
+                        }
+                    }
+
+                    byteArrayInputStream.reset();
                     BufferedImage rawImg = ImageIO.read(byteArrayInputStream);
+                    if (rawImg == null) throw new NotImageException();
                     img = new BufferedImage(rawImg.getWidth(), rawImg.getHeight(), BufferedImage.TYPE_4BYTE_ABGR);
                     img.getGraphics().drawImage(rawImg, 0, 0, null);
                     params.getMessageChannel().send(Text.of("Image dimensions: "+img.getWidth()+"x"+img.getHeight()));
+
                 }
             }
 
@@ -811,7 +834,14 @@ public class YourCustomPaintings {
         } catch (ImageSizeLimitExceededException ex) {
             params.getMessageChannel().send(Text.of(TextColors.RED, ex.getMessage()));
             logger.debug("Image file size was too big while uploading painting!", ex);
-        } catch (Exception ex) {
+        } catch (ImageDimensionsExceedException ex) {
+            params.getMessageChannel().send(Text.of(TextColors.RED, ex.getMessage()));
+            logger.debug("Image dimensions were too big while uploading painting!", ex);
+        } catch (NotImageException ex) {
+            params.getMessageChannel().send(Text.of(TextColors.RED, ex.getMessage()));
+            logger.debug("Unknown, incorrect, or corrupt format while uploading painting!", ex);
+        }
+        catch (Exception ex) {
             params.getMessageChannel().send(Text.of(TextColors.RED, "Unknown error ("+ex.getClass().getSimpleName()+") occured while uploading painting: "+ex.getMessage()));
             throw ex;
         }
