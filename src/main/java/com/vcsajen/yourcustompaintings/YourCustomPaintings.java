@@ -1190,7 +1190,7 @@ public class YourCustomPaintings {
         //-----------
         //Permission descriptions
 
-        PermissionDescription.Builder pdBuilder = Sponge.getServiceManager().provide(PermissionService.class).flatMap(
+        PermissionDescription.Builder pdBuilder = Sponge.getServiceManager().provide(PermissionService.class).map(
                 permissionService -> permissionService.newDescriptionBuilder(myPlugin)).orElse(null);
 
 
