@@ -9,9 +9,12 @@ import com.google.common.reflect.TypeToken;
 import com.google.inject.Inject;
 import com.mortennobel.imagescaling.*;
 import com.mortennobel.imagescaling.AdvancedResizeOp;
+import com.vcsajen.yourcustompaintings.database.PaintingRecord;
+import com.vcsajen.yourcustompaintings.database.PaintingRecords;
 import com.vcsajen.yourcustompaintings.exceptions.ImageDimensionsExceedException;
 import com.vcsajen.yourcustompaintings.exceptions.ImageSizeLimitExceededException;
 import com.vcsajen.yourcustompaintings.exceptions.NotImageException;
+import com.vcsajen.yourcustompaintings.exceptions.PaintingAlreadyExistsException;
 import com.vcsajen.yourcustompaintings.util.CallableWithOneParam;
 import com.vcsajen.yourcustompaintings.util.RunnableWithOneParam;
 import ninja.leaping.configurate.ConfigurationNode;
@@ -19,6 +22,7 @@ import ninja.leaping.configurate.objectmapping.ObjectMappingException;
 import org.slf4j.Logger;
 import org.spongepowered.api.Game;
 import org.spongepowered.api.Sponge;
+import org.spongepowered.api.command.CommandException;
 import org.spongepowered.api.command.CommandResult;
 import org.spongepowered.api.command.CommandSource;
 import org.spongepowered.api.command.args.CommandContext;
@@ -28,6 +32,7 @@ import org.spongepowered.api.config.ConfigDir;
 import org.spongepowered.api.data.DataQuery;
 import org.spongepowered.api.data.DataView;
 import org.spongepowered.api.entity.living.player.Player;
+import org.spongepowered.api.entity.living.player.User;
 import org.spongepowered.api.event.Listener;
 import org.spongepowered.api.event.block.InteractBlockEvent;
 import org.spongepowered.api.event.filter.cause.Root;
@@ -42,13 +47,18 @@ import org.spongepowered.api.config.DefaultConfig;
 import ninja.leaping.configurate.commented.CommentedConfigurationNode;
 import ninja.leaping.configurate.loader.ConfigurationLoader;
 import org.spongepowered.api.scheduler.SpongeExecutorService;
+import org.spongepowered.api.service.pagination.PaginationList;
 import org.spongepowered.api.service.permission.PermissionDescription;
 import org.spongepowered.api.service.permission.PermissionService;
+import org.spongepowered.api.service.user.UserStorageService;
 import org.spongepowered.api.text.Text;
 import org.spongepowered.api.scheduler.Task;
+import org.spongepowered.api.text.action.ClickAction;
+import org.spongepowered.api.text.action.TextActions;
 import org.spongepowered.api.text.channel.MessageChannel;
 import org.spongepowered.api.text.channel.MessageReceiver;
 import org.spongepowered.api.text.format.TextColors;
+import org.spongepowered.api.util.Identifiable;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
@@ -65,6 +75,7 @@ import java.net.URLConnection;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.sql.SQLException;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -88,7 +99,7 @@ public class YourCustomPaintings {
     private PluginContainer myPlugin;
 
     @Inject
-    @DefaultConfig(sharedRoot = true)
+    @DefaultConfig(sharedRoot = false)
     private ConfigurationLoader<CommentedConfigurationNode> configManager;
 
     @Inject
@@ -97,7 +108,13 @@ public class YourCustomPaintings {
 
     private YcpConfig myConfig;
 
-    ConcurrentHashMap<UUID, UserSession> sessions;
+    private UserStorageService userStorageService;
+
+    private ConcurrentHashMap<UUID, UserSession> sessions;
+
+    private PaintingRecords paintings;
+
+    private int pageLen = 15;
 
     @SuppressWarnings("WeakerAccess")
     private class UploadPaintingParams
@@ -105,6 +122,8 @@ public class YourCustomPaintings {
         @Nullable
         private UUID callerPlr;
         private MessageChannel messageChannel;
+        private UUID ownerUser;
+        private String name;
         private String url;
         private int mapsX;
         private int mapsY;
@@ -118,8 +137,20 @@ public class YourCustomPaintings {
         private boolean debugMode;
         private int progressReportTime;
 
+        public Optional<UUID> getCallerPlr() {
+            return Optional.ofNullable(callerPlr);
+        }
+
         public MessageChannel getMessageChannel() {
             return messageChannel;
+        }
+
+        public UUID getOwnerUser() {
+            return ownerUser;
+        }
+
+        public String getName() {
+            return name;
         }
 
         public String getUrl() {
@@ -140,10 +171,6 @@ public class YourCustomPaintings {
 
         public AdvancedResizeOp.UnsharpenMask getUnsharpenMask() {
             return unsharpenMask;
-        }
-
-        public Optional<UUID> getCallerPlr() {
-            return Optional.ofNullable(callerPlr);
         }
 
         public DitherMode getDitherMode() {
@@ -174,9 +201,11 @@ public class YourCustomPaintings {
             return progressReportTime;
         }
 
-        public UploadPaintingParams(@Nullable UUID callerPlr, MessageChannel messageChannel, String url, int mapsX, int mapsY, ScaleMode scaleMode, AdvancedResizeOp.UnsharpenMask unsharpenMask, DitherMode ditherMode, double colorBleedReduction, int maxImgFileSize, int maxImgW, int maxImgH, boolean debugMode, int progressReportTime) {
+        public UploadPaintingParams(@Nullable UUID callerPlr, MessageChannel messageChannel, UUID ownerUser, String name, String url, int mapsX, int mapsY, ScaleMode scaleMode, AdvancedResizeOp.UnsharpenMask unsharpenMask, DitherMode ditherMode, double colorBleedReduction, int maxImgFileSize, int maxImgW, int maxImgH, boolean debugMode, int progressReportTime) {
             this.callerPlr = callerPlr;
             this.messageChannel = messageChannel;
+            this.ownerUser = ownerUser;
+            this.name = name;
             this.url = url;
             this.mapsX = mapsX;
             this.mapsY = mapsY;
@@ -484,7 +513,7 @@ public class YourCustomPaintings {
         return Math.sqrt((((512+rmean)*r*r)>>8) + 4*g*g + (((767-rmean)*b*b)>>8));
     }
 
-    static double colorDistance(int R1, int G1, int B1, int R2, int G2, int B2)
+    private static double colorDistance(int R1, int G1, int B1, int R2, int G2, int B2)
     {
         int rmean = (R1 + R2) >> 1;
         int r = R1 - R2;
@@ -493,7 +522,7 @@ public class YourCustomPaintings {
         return Math.sqrt((((512+rmean)*r*r)>>8) + 4*g*g + (((767-rmean)*b*b)>>8));
     }
 
-    int closestMapColorIndex(int R, int G, int B)
+    private int closestMapColorIndex(int R, int G, int B)
     {
         int closestIndex = 0;
         double closestDistance = 1E100;
@@ -508,10 +537,29 @@ public class YourCustomPaintings {
         return closestIndex;
     }
 
-    int constrainInt(int val, int min, int max)
+    private int constrainInt(int val, int min, int max)
     {
         if (val < min) return min;
         return val>max ? max : val;
+    }
+
+    private static Dimension getImageDimensions(InputStream inputStream) throws IOException {
+        try (ImageInputStream input = ImageIO.createImageInputStream(inputStream)) {
+            final Iterator<ImageReader> readers = ImageIO.getImageReaders(input);
+            if (readers.hasNext()) {
+                ImageReader reader = readers.next();
+                try {
+                    reader.setInput(input);
+                    // Get dimensions of first image in the stream, without decoding pixel values
+                    int width = reader.getWidth(0);
+                    int height = reader.getHeight(0);
+                    return new Dimension(width, height);
+                } finally {
+                    reader.dispose();
+                }
+            }
+        }
+        return new Dimension();
     }
 
     private void runUploadPaintingTask(@Nonnull UploadPaintingParams params) {
@@ -524,6 +572,10 @@ public class YourCustomPaintings {
             if (url.getProtocol() == null || !(url.getProtocol().equals("http") || url.getProtocol().equals("https") || url.getProtocol().equals("ftp")))
                 throw new MalformedURLException("Wrong URL protocol, only http(s) and ftp supported!");
             conn = url.openConnection();
+            //Setting http headers; without them some sites return error 403
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 6.1; WOW64; rv:54.0) Gecko/20100101 Firefox/54.0");
+            conn.setRequestProperty("Accept", "*/*");
+            conn.setRequestProperty("Referer", params.getUrl());
             // now you get the content length
             int cLength = conn.getContentLength();
             if (cLength > params.getMaxImgFileSize()) throw new ImageSizeLimitExceededException();
@@ -552,30 +604,16 @@ public class YourCustomPaintings {
                 try (ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(byteArrayOutputStream.toByteArray()))
                 {
                     // Getting and checking dimensions without reading whole file (PNG bomb protection)
-                    try (ImageInputStream input = ImageIO.createImageInputStream(byteArrayInputStream)) {
-                        final Iterator<ImageReader> readers = ImageIO.getImageReaders(input);
-                        if (readers.hasNext()) {
-                            ImageReader reader = readers.next();
-                            try {
-                                reader.setInput(input);
-                                // Get dimensions of first image in the stream, without decoding pixel values
-                                int width = reader.getWidth(0);
-                                int height = reader.getHeight(0);
-                                if (width>params.getMaxImgW() || height>params.getMaxImgH())
-                                    throw new ImageDimensionsExceedException(width, height, params.getMaxImgW(), params.getMaxImgH());
-                            } finally {
-                                reader.dispose();
-                            }
-                        }
-                    }
+                    Dimension imgDimensions = getImageDimensions(byteArrayInputStream);
+                    if (imgDimensions.width>params.getMaxImgW() || imgDimensions.height>params.getMaxImgH())
+                        throw new ImageDimensionsExceedException(imgDimensions.width, imgDimensions.height, params.getMaxImgW(), params.getMaxImgH());
 
                     byteArrayInputStream.reset();
                     BufferedImage rawImg = ImageIO.read(byteArrayInputStream);
                     if (rawImg == null) throw new NotImageException();
                     img = new BufferedImage(rawImg.getWidth(), rawImg.getHeight(), BufferedImage.TYPE_4BYTE_ABGR);
                     img.getGraphics().drawImage(rawImg, 0, 0, null);
-                    params.getMessageChannel().send(Text.of("Image dimensions: "+img.getWidth()+"x"+img.getHeight()));
-
+                    //params.getMessageChannel().send(Text.of("Image dimensions: "+img.getWidth()+"x"+img.getHeight()));
                 }
             }
 
@@ -793,23 +831,23 @@ public class YourCustomPaintings {
                          NBTOutputStream nbtOutputStream = new NBTOutputStream(fos, false)) {
                         nbtOutputStream.writeTag(root);
                     }
+                    PaintingRecord painting = new PaintingRecord(params.getOwnerUser(), params.getName(), params.getMapsX(), params.getMapsY(), calcLastMapId+1);
                     if (regMapParams.getCallerPlr().isPresent()) {
-                        Sponge.getGame().getServer().getPlayer(regMapParams.getCallerPlr().get()).ifPresent(player -> {
-                            for (int i=0;i<regMapParams.getTileCount();i++) {
-                                ItemStack itemStack = ItemStack.builder().itemType(ItemTypes.FILLED_MAP).quantity(1).build();
-                                DataView rawData = itemStack.toContainer();
-                                rawData.set(DataQuery.of("UnsafeDamage"), calcLastMapId+1+i);
-                                rawData.set(DataQuery.of("UnsafeData", "display", "LocName"), "item.painting.name");
-                                rawData.set(DataQuery.of("UnsafeData", "display", "MapColor"), 16744576);
-
-                                itemStack = ItemStack.builder().fromContainer(rawData).build();
-                                player.getInventory().offer(itemStack);
-                            }
-                        });
+                        Sponge.getGame().getServer().getPlayer(regMapParams.getCallerPlr().get()).ifPresent(player ->
+                                givePaintingToPlayer(painting, player));
                     }
+                    paintings.addPainting(painting);
                 } catch (IOException e) {
                     regMapParams.getMessageChannel().send(Text.of(TextColors.RED, "IO Error while performing actual map rename/registration"));
                     logger.error("IO Error in futuresGetLastMapInd!", e);
+                    return false;
+                } catch (PaintingAlreadyExistsException e) {
+                    regMapParams.getMessageChannel().send(Text.of(TextColors.RED, "Error: painting with that name already exists!"));
+                    logger.error("PaintingAlreadyExistsException in futuresGetLastMapInd!", e);
+                    return false;
+                } catch (SQLException e) {
+                    regMapParams.getMessageChannel().send(Text.of(TextColors.RED, "Some database error while performing actual map rename/registration"));
+                    logger.error("SQLException in futuresGetLastMapInd!", e);
                     return false;
                 }
                 return true;
@@ -857,7 +895,10 @@ public class YourCustomPaintings {
         }
     }
 
-    private CommandResult cmdUpldPainting(CommandSource cmdSource, CommandContext commandContext) {
+    @Nonnull
+    private CommandResult cmdUpldPainting(CommandSource cmdSource, CommandContext commandContext) throws CommandException {
+        UUID owner = commandContext.<User>getOne("Player").map(User::getUniqueId).orElse(cmdSource instanceof User ? ((User)cmdSource).getUniqueId() : null);
+        String name = commandContext.<String>getOne("Name").get();
         String url = commandContext.<String>getOne("URL").get();
         int mapsX = commandContext.<Integer>getOne("MapsX").orElse(1);
         int mapsY = commandContext.<Integer>getOne("MapsY").orElse(1);
@@ -870,18 +911,20 @@ public class YourCustomPaintings {
             return CommandResult.successCount(0);
         }*/
         double colorBleedReduction = commandContext.<Double>getOne("ColorBleedReductionPercent").orElse(0.0);
-        if (colorBleedReduction<-0.000001 || colorBleedReduction>(100.000001)) {
-            cmdSource.sendMessage(Text.of(TextColors.RED, "Error! ColorBleedReductionPercent must be between 0.0 and 100.0!"));
-            return CommandResult.successCount(0);
-        }
+        if (owner==null)
+            throw new CommandException(Text.of("You must specify <Player> if you yourself aren't a player!"));
+        if (colorBleedReduction<-0.000001 || colorBleedReduction>(100.000001))
+            throw new CommandException(Text.of("Error! ColorBleedReductionPercent must be between 0.0 and 100.0!"));
         colorBleedReduction = 1-colorBleedReduction/100;
+        if (paintings.isPaintingExists(owner, name))
+            throw new CommandException(Text.of("Error! Painting with that name already exists in user's scope!"));
 
         int maxMapsX = 128;
         int maxMapsY = 128;
         int maxPaintingW = 8192;
         int maxPaintingH = 8192;
         int maxImgFileSize = myConfig.getMaxImgFileSize();
-        if (Player.class.isInstance(cmdSource)) {
+        if (cmdSource instanceof Player) {
             Player player = (Player)cmdSource;
             try {
                 maxMapsX = Integer.valueOf(player.getOption("yourcustompaintings.commands.uploadpainting.max.maps.x").orElse(Integer.toString(maxMapsX)));
@@ -893,27 +936,24 @@ public class YourCustomPaintings {
                 logger.warn("Warning: player options for player "+player.getName()+" have syntax errors!");
             }
         }
-        if (mapsX <= 0 || mapsX > maxMapsX || mapsY <= 0 || mapsY > maxMapsY) {
-            cmdSource.sendMessage(Text.of(TextColors.RED, "Error! MapsX/MapsY should be positive and "+maxMapsX+"x"+maxMapsY+" max!"));
-            return CommandResult.successCount(0);
-        }
+        if (mapsX <= 0 || mapsX > maxMapsX || mapsY <= 0 || mapsY > maxMapsY)
+            throw new CommandException(Text.of("Error! MapsX/MapsY should be positive and "+maxMapsX+"x"+maxMapsY+" max!"));
 
         UUID uuid = Player.class.isInstance(cmdSource) ? ((Player)cmdSource).getUniqueId() : null;
 
         try {
             if (uuid != null) {
                 sessions.putIfAbsent(uuid, new UserSession(false));
-                if (!sessions.get(uuid).getInProcess().compareAndSet(false, true)) {
-                    cmdSource.sendMessage(Text.of(TextColors.RED, "Already uploading another painting!"));
-                    return CommandResult.successCount(0);
-                }
+                if (!sessions.get(uuid).getInProcess().compareAndSet(false, true))
+                    throw new CommandException(Text.of("Already uploading another painting!"));
             }
 
             cmdSource.sendMessage(Text.of("Downloading " + url + "…"));
 
-            Task task = Task.builder().execute(new RunnableWithOneParam<UploadPaintingParams>(
+            Task task = Task.builder().execute(new RunnableWithOneParam<>(
                     new UploadPaintingParams(uuid,
-                            cmdSource.getMessageChannel(), url, mapsX, mapsY, scaleMode, unsharpenMask,
+                            cmdSource.getMessageChannel(), owner, name,
+                            url, mapsX, mapsY, scaleMode, unsharpenMask,
                             ditherMode, colorBleedReduction, maxImgFileSize, maxPaintingW, maxPaintingH,
                             myConfig.isDebugMode(), myConfig.getProgressReportTime()), this::runUploadPaintingTask))
                     .async()
@@ -931,8 +971,108 @@ public class YourCustomPaintings {
         return CommandResult.success();
     }
 
+    @Nonnull
+    private CommandResult cmdRetroactivelyAddPainting(CommandSource cmdSource, CommandContext commandContext) {
+        if (!myConfig.isDebugMode())
+            return CommandResult.successCount(0);
+
+        UUID plr = commandContext.<User>getOne("Player").get().getUniqueId();
+        String name = commandContext.<String>getOne("Name").get();
+        int mapsX = commandContext.<Integer>getOne("MapsX").get();
+        int mapsY = commandContext.<Integer>getOne("MapsY").get();
+        int startMapId = commandContext.<Integer>getOne("StartMapId").get();
+
+        try {
+            paintings.addPainting(new PaintingRecord(plr, name, mapsX, mapsY, startMapId));
+        } catch (SQLException e) {
+            logger.error("SQLException while running '/retroactivelyaddpainting' command", e);
+        } catch (PaintingAlreadyExistsException e) {
+            cmdSource.sendMessage(Text.of(TextColors.RED, "Painting with given name already exists for that player!"));
+            return CommandResult.successCount(0);
+        }
+        return CommandResult.success();
+    }
+
+    private void givePaintingToPlayer(@Nonnull PaintingRecord painting, @Nonnull Player player) {
+        for (int i=0;i<painting.getLengthMapId();i++) {
+            ItemStack itemStack = ItemStack.builder().itemType(ItemTypes.FILLED_MAP).quantity(1).build();
+            DataView rawData = itemStack.toContainer();
+            rawData.set(DataQuery.of("UnsafeDamage"), painting.getStartMapId()+i);
+            rawData.set(DataQuery.of("UnsafeData", "display", "LocName"), "item.painting.name");
+            rawData.set(DataQuery.of("UnsafeData", "display", "MapColor"), 16744576);
+
+            itemStack = ItemStack.builder().fromContainer(rawData).build();
+            player.getInventory().offer(itemStack);
+        }
+    }
+
+    @Nonnull
+    private CommandResult cmdGetPainting(CommandSource cmdSource, CommandContext commandContext) throws CommandException {
+        if (!(cmdSource instanceof Player))
+            throw new CommandException(Text.of("Can't execute that from non-player!"));
+        Player player = (Player)cmdSource;
+        UUID owner = commandContext.<User>getOne("Player").orElse(player).getUniqueId();
+        String name = commandContext.<String>getOne("Name").get();
+        PaintingRecord painting = paintings.getPainting(owner,name);
+        if (painting==null)
+            throw new CommandException(Text.of("No painting found!"));
+        givePaintingToPlayer(painting,player);
+        return CommandResult.success();
+    }
+
+    @Nonnull
+    private CommandResult cmdPaintingsList(CommandSource cmdSource, CommandContext commandContext) throws CommandException {
+        User caller = (cmdSource instanceof User) ? (User)cmdSource : null;
+        User owner = commandContext.<User>getOne("Player").orElse(caller);
+        boolean all = commandContext.<Boolean>getOne("all").orElse(false);
+        int page = commandContext.<Integer>getOne("Page").get();
+
+        if (!all && owner==null) throw new CommandException(Text.of("Must specify user, but no <Player> parameter is found, nor caller is a user!"), true);
+        if (page <= 0) throw new CommandException(Text.of("Page must be greater than zero!"), true);
+        boolean callerIsOwner = !all && caller!=null && owner.getUniqueId().equals(caller.getUniqueId());
+
+        List<PaintingRecord> paintingRecords;
+        int totalpages;
+        if (all) {
+            paintingRecords = paintings.getAllPaintingsPaged(page);
+            totalpages = paintings.getAllPaintingsCount();
+        } else {
+            paintingRecords = paintings.getAllPaintingsByUserPaged(owner.getUniqueId(), page);
+            totalpages = paintings.getAllPaintingsByUserCount(owner.getUniqueId());
+        }
+        totalpages = (totalpages / pageLen)+1;
+        //PaginationList.builder().
+        String separator = "=============";
+        String title = (all ? "All " : (owner.getName()+"'s ")) + "paintings";
+        List<Text> textsToSend = new LinkedList<>();
+        textsToSend.add(Text.of());
+        textsToSend.add(Text.of(separator, " ", title, " ", separator));
+        textsToSend.add(Text.of(all ? "Owner, " : "", "Name, MapsX x MapsY, StartMapId.", caller!=null ? " >Clickable link to get painting<" : ""));
+        for (PaintingRecord paintingRecord: paintingRecords) {
+            String username = userStorageService.get(paintingRecord.getOwner()).map(User::getName).orElse("<Unknown User>");
+            String cmd = "/getpainting " + (callerIsOwner ? "" : (username+" ")) + paintingRecord.getName();
+            textsToSend.add(Text.of(
+                    all ? username+", " : "",
+                    paintingRecord.getName()+", ",
+                    paintingRecord.getMapsX()+"x"+paintingRecord.getMapsY()+", ",
+                    "#"+paintingRecord.getStartMapId()+". ",
+                    caller!=null ? Text.builder(">GET<").color(TextColors.BLUE).onClick(TextActions.runCommand(cmd)).onHover(TextActions.showText(Text.of("Click to get painting"))).build() : ""));
+        }
+
+        String pageCmd = "/paintingslist "+(all ? "all " : (!callerIsOwner ? owner.getName()+" " : ""))+"%d";
+        Text prevLink = page-1>=1 ? Text.builder(" <<").color(TextColors.BLUE).onClick(TextActions.runCommand(String.format(pageCmd, page-1))).onHover(TextActions.showText(Text.of("Prev"))).build()
+                : Text.builder(" <<").color(TextColors.GRAY).build();
+        Text nextLink = page+1<=totalpages ? Text.builder(">> ").color(TextColors.BLUE).onClick(TextActions.runCommand(String.format(pageCmd, page+1))).onHover(TextActions.showText(Text.of("Next"))).build()
+                : Text.builder(">> ").color(TextColors.GRAY).build();
+        if (caller!=null)
+            textsToSend.add(Text.of(separator, prevLink, String.format(" %d of %d ", page, totalpages), nextLink, separator));
+        else textsToSend.add(Text.of(separator, String.format(" %d of %d ", page, totalpages), separator));
+        cmdSource.sendMessages(textsToSend);
+        return CommandResult.success();
+    }
+
     @Listener
-    public void onInteractBlockEvent(InteractBlockEvent.Secondary event, @Root MessageReceiver eventSrc) {
+    public void onInteractBlockEvent(InteractBlockEvent.Secondary event, @Root User eventSrc) {
         //logger.debug("Saves directory: "+String.valueOf(game.getSavesDirectory()));
         /*if(event.getTargetBlock().getProperty(PassableProperty.class).isPresent())
         {
@@ -942,6 +1082,9 @@ public class YourCustomPaintings {
             eventSrc.getMessageChannel().send(Text.of("Passable: " + isPassable.getValue()));
         }*/
 
+        if (eventSrc.hasPermission("yourcustompaintings.paintingplacer.place")) {
+
+        }
 
     }
 
@@ -978,7 +1121,10 @@ public class YourCustomPaintings {
         CommandSpec uploadPaintingCmdSpec = CommandSpec.builder()
                 .description(Text.of("Upload painting from web"))
                 .extendedDescription(Text.of("Enter URL of a picture, map(s) containing painting will be generated"))
-                .arguments(GenericArguments.string(Text.of("URL")),
+                .arguments(
+                        GenericArguments.optional(GenericArguments.requiringPermission(GenericArguments.onlyOne(GenericArguments.user(Text.of("Player"))), "yourcustompaintings.commands.uploadpainting.others")),
+                        GenericArguments.string(Text.of("Name")),
+                        GenericArguments.string(Text.of("URL")),
                         GenericArguments.optional(GenericArguments.seq(GenericArguments.integer(Text.of("MapsX")), GenericArguments.integer(Text.of("MapsY")))),
                         GenericArguments.optional(GenericArguments.enumValue(Text.of("ScaleMode"), ScaleMode.class), ScaleMode.Lanczos3)/*,
                         GenericArguments.optional(GenericArguments.enumValue(Text.of("UnsharpenMode"), UnsharpenMask.class), UnsharpenMask.None)*/,
@@ -988,6 +1134,59 @@ public class YourCustomPaintings {
                 .executor(this::cmdUpldPainting)
                 .build();
         game.getCommandManager().register(this, uploadPaintingCmdSpec, "uploadpainting", "up-p");
+
+        CommandSpec getPaintingCmdSpec = CommandSpec.builder()
+                .description(Text.of("Get your previously uploaded painting"))
+                .extendedDescription(Text.of("Enter name of your painting to get it"))
+                .arguments(
+                        GenericArguments.optional(GenericArguments.requiringPermission(GenericArguments.onlyOne(GenericArguments.user(Text.of("Player"))), "yourcustompaintings.commands.getpainting.others")),
+                        GenericArguments.string(Text.of("Name")) )
+                .permission("yourcustompaintings.commands.getpainting.execute")
+                .executor(this::cmdGetPainting)
+                .build();
+        game.getCommandManager().register(this, getPaintingCmdSpec, "getpainting", "g-p");
+
+        CommandSpec paintingsListCmdSpec = CommandSpec.builder()
+                .description(Text.of("Gets list of paintings"))
+                .extendedDescription(Text.of("Add 'all' parameter to view all painting, otherwise view list of own/user's painting"))
+                .arguments(
+                        GenericArguments.optional(
+                                GenericArguments.firstParsing(
+                                        GenericArguments.requiringPermission(GenericArguments.literal(Text.of("all"), "all"), "yourcustompaintings.commands.paintingslist.all"),
+                                        GenericArguments.requiringPermission(GenericArguments.onlyOne(GenericArguments.user(Text.of("Player"))), "yourcustompaintings.commands.paintingslist.others"))),
+                        GenericArguments.optional(GenericArguments.integer(Text.of("Page")), 1))
+                .permission("yourcustompaintings.commands.paintingslist.execute")
+                .executor(this::cmdPaintingsList)
+                .build();
+        game.getCommandManager().register(this, paintingsListCmdSpec, "paintingslist", "p-l");
+
+        //debug commands
+        if (myConfig.isDebugMode()) {
+            CommandSpec retroactivelyAddPaintingCmdSpec = CommandSpec.builder()
+                    .description(Text.of("Adds a painting retroactively"))
+                    .extendedDescription(Text.of("Retroactively adds already existing painting to database"))
+                    .arguments(
+                            GenericArguments.onlyOne(GenericArguments.userOrSource(Text.of("Player"))),
+                            GenericArguments.string(Text.of("Name")),
+                            GenericArguments.integer(Text.of("MapsX")),
+                            GenericArguments.integer(Text.of("MapsY")),
+                            GenericArguments.integer(Text.of("StartMapId")))
+                    .permission("yourcustompaintings.commands.retroactivelyaddpainting.execute")
+                    .executor(this::cmdRetroactivelyAddPainting)
+                    .build();
+            game.getCommandManager().register(this, retroactivelyAddPaintingCmdSpec, "retroactivelyaddpainting", "raddp");
+
+            CommandSpec testytestCmdSpec = CommandSpec.builder()
+                    .description(Text.of("Adds a painting retroactively"))
+                    .extendedDescription(Text.of("Retroactively adds already existing painting to database"))
+                    .arguments(
+                            GenericArguments.literal(Text.of("bla"), "bla"),
+                            GenericArguments.string(Text.of("Name")))
+                    .permission("yourcustompaintings.commands.retroactivelyaddpainting.execute")
+                    .executor(this::cmdTestytest)
+                    .build();
+            game.getCommandManager().register(this, testytestCmdSpec, "testytest");
+        }
         //-----------
         //Permission descriptions
 
@@ -1000,9 +1199,67 @@ public class YourCustomPaintings {
                     .description(Text.of("Allows the user to execute the uploadpainting command."))
                     .assign(PermissionDescription.ROLE_STAFF, true)
                     .register();
+
+            pdBuilder.id("yourcustompaintings.commands.uploadpainting.others")
+                    .description(Text.of("Allows the Operator to upload painting under guise of another user account"))
+                    .assign(PermissionDescription.ROLE_ADMIN, true)
+                    .register();
+
+            pdBuilder.id("yourcustompaintings.commands.getpainting.execute")
+                    .description(Text.of("Allows the user to execute the uploadpainting command."))
+                    .assign(PermissionDescription.ROLE_STAFF, true)
+                    .register();
+
+            pdBuilder.id("yourcustompaintings.commands.getpainting.others")
+                    .description(Text.of("Allows the user to get paintings of other users with /getpainting"))
+                    .assign(PermissionDescription.ROLE_STAFF, true)
+                    .register();
+
+            pdBuilder.id("yourcustompaintings.commands.paintingslist.execute")
+                    .description(Text.of("Allows the user to execute the paintingslist command."))
+                    .assign(PermissionDescription.ROLE_STAFF, true)
+                    .register();
+
+            pdBuilder.id("yourcustompaintings.commands.paintingslist.all")
+                    .description(Text.of("Allows the user to get list of all paintings"))
+                    .assign(PermissionDescription.ROLE_STAFF, true)
+                    .register();
+
+            pdBuilder.id("yourcustompaintings.commands.paintingslist.others")
+                    .description(Text.of("Allows the user to get list of paintings of other users"))
+                    .assign(PermissionDescription.ROLE_STAFF, true)
+                    .register();
+
+            pdBuilder.id("yourcustompaintings.paintingplacer.place")
+                    .description(Text.of("Allows the user place paintings with painting placer. Usually admins allow users to have it by default"))
+                    .assign(PermissionDescription.ROLE_USER, true)
+                    .register();
+
+            pdBuilder.id("yourcustompaintings.paintingplacer.dontselfdestruct")
+                    .description(Text.of("Allows the user to place paintings with painting placer any times they want in Survival.\n" +
+                            "Please note that even if they don't have this permission, they can still copy individual maps that's " +
+                            "contains painting with vanilla method.\n" +
+                            "Users in Creative don't need this permission."))
+                    .assign(PermissionDescription.ROLE_USER, true)
+                    .register();
+
+            pdBuilder.id("yourcustompaintings.paintingplacer.bypasssurvival")
+                    .description(Text.of("Allows the user to get paintings in survival without requirement of having blank " +
+                            "maps and item frames in the inventory"))
+                    .assign(PermissionDescription.ROLE_STAFF, true)
+                    .register();
+
+            //debug permissions
+            if (myConfig.isDebugMode()) {
+                pdBuilder.id("yourcustompaintings.commands.retroactivelyaddpainting.execute")
+                        .description(Text.of("Allows the user to execute the retroactivelyaddpainting command."))
+                        .assign(PermissionDescription.ROLE_STAFF, true)
+                        .register();
+            }
         }
         //-----------
         //Other
+        userStorageService = Sponge.getServiceManager().provide(UserStorageService.class).orElseThrow(() -> new IllegalStateException("No UserStorageService is found! Something is very wrong."));
         dbgDir = configDir.resolve("debug");
         if (myConfig.isDebugMode()) {
             File directory = dbgDir.toFile();
@@ -1014,6 +1271,16 @@ public class YourCustomPaintings {
         }
         randomStringGenerator = new RandomStringGenerator(8);
         sessions = new ConcurrentHashMap<>();
+        try {
+            paintings = new PaintingRecords(configDir.resolve(myPlugin.getId()), pageLen);
+        } catch (SQLException e) {
+            logger.error("Failed to load database!", e);
+        }
+    }
+
+    private CommandResult cmdTestytest(CommandSource commandSource, CommandContext commandContext) {
+        commandSource.sendMessage( Text.of("bla=", commandContext.getOne("bla").get()));
+        return CommandResult.success();
     }
 
     @Listener
