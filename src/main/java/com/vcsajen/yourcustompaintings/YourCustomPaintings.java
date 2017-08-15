@@ -13,10 +13,7 @@ import com.mortennobel.imagescaling.ResampleFilters;
 import com.mortennobel.imagescaling.ResampleOp;
 import com.vcsajen.yourcustompaintings.database.PaintingRecord;
 import com.vcsajen.yourcustompaintings.database.PaintingRecords;
-import com.vcsajen.yourcustompaintings.exceptions.ImageDimensionsExceedException;
-import com.vcsajen.yourcustompaintings.exceptions.ImageSizeLimitExceededException;
-import com.vcsajen.yourcustompaintings.exceptions.NotImageException;
-import com.vcsajen.yourcustompaintings.exceptions.PaintingAlreadyExistsException;
+import com.vcsajen.yourcustompaintings.exceptions.*;
 import com.vcsajen.yourcustompaintings.util.CallableWithOneParam;
 import com.vcsajen.yourcustompaintings.util.RunnableWithOneParam;
 import ninja.leaping.configurate.ConfigurationNode;
@@ -34,18 +31,17 @@ import org.spongepowered.api.command.args.GenericArguments;
 import org.spongepowered.api.command.spec.CommandSpec;
 import org.spongepowered.api.config.ConfigDir;
 import org.spongepowered.api.config.DefaultConfig;
-import org.spongepowered.api.data.DataQuery;
-import org.spongepowered.api.data.DataView;
 import org.spongepowered.api.entity.living.player.Player;
 import org.spongepowered.api.entity.living.player.User;
+import org.spongepowered.api.entity.living.player.gamemode.GameModes;
 import org.spongepowered.api.event.Listener;
-import org.spongepowered.api.event.block.InteractBlockEvent;
-import org.spongepowered.api.event.filter.cause.Root;
 import org.spongepowered.api.event.game.GameReloadEvent;
 import org.spongepowered.api.event.game.state.GameInitializationEvent;
 import org.spongepowered.api.event.game.state.GamePreInitializationEvent;
 import org.spongepowered.api.event.game.state.GameStartedServerEvent;
+import org.spongepowered.api.item.ItemType;
 import org.spongepowered.api.item.ItemTypes;
+import org.spongepowered.api.item.inventory.Inventory;
 import org.spongepowered.api.item.inventory.ItemStack;
 import org.spongepowered.api.plugin.Plugin;
 import org.spongepowered.api.plugin.PluginContainer;
@@ -837,8 +833,9 @@ public class YourCustomPaintings {
                     }
                     PaintingRecord painting = new PaintingRecord(params.getOwnerUser(), params.getName(), params.getMapsX(), params.getMapsY(), calcLastMapId+1);
                     if (regMapParams.getCallerPlr().isPresent()) {
-                        Sponge.getGame().getServer().getPlayer(regMapParams.getCallerPlr().get()).ifPresent(player ->
-                                givePaintingToPlayer(painting, player));
+                        Player plr = Sponge.getGame().getServer().getPlayer(regMapParams.getCallerPlr().get()).orElse(null);
+                        if (plr!=null)
+                            givePaintingToPlayer(painting, plr);
                     }
                     paintings.addPainting(painting);
                 } catch (IOException e) {
@@ -848,6 +845,9 @@ public class YourCustomPaintings {
                 } catch (PaintingAlreadyExistsException e) {
                     regMapParams.getMessageChannel().send(Text.of(TextColors.RED, "Error: painting with that name already exists!"));
                     logger.error("PaintingAlreadyExistsException in futuresGetLastMapInd!", e);
+                    return false;
+                } catch (MissingRequiredItemException e) {
+                    regMapParams.getMessageChannel().send(Text.of(TextColors.RED, e.getMessage()));
                     return false;
                 } catch (SQLException e) {
                     regMapParams.getMessageChannel().send(Text.of(TextColors.RED, "Some database error while performing actual map rename/registration"));
@@ -999,16 +999,29 @@ public class YourCustomPaintings {
 
 
 
-    private void givePaintingToPlayer(@Nonnull PaintingRecord painting, @Nonnull Player player) {
+    private void givePaintingToPlayer(@Nonnull PaintingRecord painting, @Nonnull Player player) throws MissingRequiredItemException {
+        ItemStack requiredItemType;
+        ItemStack itemToGive;
         if (painting.getLengthMapId()==1) {
-            player.getInventory().offer(PaintingPlacer.getPaintingMapItem(painting.getStartMapId()));
+            requiredItemType=ItemStack.builder().itemType(ItemTypes.MAP).quantity(1).build();
+            itemToGive = PaintingPlacer.getPaintingMapItem(painting.getStartMapId());
         }
         else {
-            player.getInventory().offer(paintingPlacer.getPlacerItem(painting));
+            requiredItemType=ItemStack.builder().itemType(ItemTypes.STICK).quantity(1).build();
+            itemToGive = paintingPlacer.getPlacerItem(painting);
+
             /*for (int i = 0; i < painting.getLengthMapId(); i++) {
                 player.getInventory().offer(PaintingPlacer.getPaintingMapItem(painting.getStartMapId() + i));
             }*/
         }
+        if (!player.hasPermission("yourcustompaintings.bypasssurvival") && player.gameMode().get() != GameModes.CREATIVE) {
+            Inventory inv = player.getInventory().queryAny(requiredItemType);
+            if (inv.totalItems()>=1) {
+                inv.poll(1);
+                player.getInventory().offer(itemToGive);
+            } else
+                throw new MissingRequiredItemException(requiredItemType, 1);
+        } else player.getInventory().offer(itemToGive);
     }
 
     @Nonnull
@@ -1021,7 +1034,11 @@ public class YourCustomPaintings {
         PaintingRecord painting = paintings.getPainting(owner,name);
         if (painting==null)
             throw new CommandException(Text.of("No painting found!"));
-        givePaintingToPlayer(painting,player);
+        try {
+            givePaintingToPlayer(painting,player);
+        } catch (MissingRequiredItemException e) {
+            throw new CommandException(Text.of(e.getMessage()));
+        }
         return CommandResult.success();
     }
 
@@ -1074,23 +1091,6 @@ public class YourCustomPaintings {
         else textsToSend.add(Text.of(separator, String.format(" %d of %d ", page, totalpages), separator));
         cmdSource.sendMessages(textsToSend);
         return CommandResult.success();
-    }
-
-    @Listener
-    public void onInteractBlockEvent(InteractBlockEvent.Secondary event, @Root User eventSrc) {
-        //logger.debug("Saves directory: "+String.valueOf(game.getSavesDirectory()));
-        /*if(event.getTargetBlock().getProperty(PassableProperty.class).isPresent())
-        {
-            //PassableProperty isPassable = event.getTargetBlock().getProperty(PassableProperty.class).get();
-            PassableProperty isPassable = event.getTargetBlock().getProperty(PassableProperty.class).get();
-            eventSrc.getMessageChannel().send(Text.of(event.getClass().getName()));
-            eventSrc.getMessageChannel().send(Text.of("Passable: " + isPassable.getValue()));
-        }*/
-
-        if (eventSrc.hasPermission("yourcustompaintings.paintingplacer.place")) {
-
-        }
-
     }
 
     private void loadConfig()
@@ -1318,8 +1318,8 @@ public class YourCustomPaintings {
                     .assign(PermissionDescription.ROLE_USER, true)
                     .register();
 
-            pdBuilder.id("yourcustompaintings.paintingplacer.bypasssurvival")
-                    .description(Text.of("Allows the user to get paintings in survival without requirement of having blank " +
+            pdBuilder.id("yourcustompaintings.bypasssurvival")
+                    .description(Text.of("Allows the user to get and place paintings in survival without requirement of having blank " +
                             "maps and item frames in the inventory"))
                     .assign(PermissionDescription.ROLE_STAFF, true)
                     .register();
@@ -1332,27 +1332,6 @@ public class YourCustomPaintings {
                         .register();
             }
         }
-        /*//-----------
-        //Data registration
-        DataManager dm = Sponge.getDataManager();
-
-        // Home
-        dm.registerBuilder(Home.class, new HomeBuilder());
-        dm.registerContentUpdater(Home.class, new HomeBuilder.NameUpdater());
-        // Or, we could use a translator instead of implementing DataSerializable (only ONE is required)
-        // dm.registerTranslator(Home.class, new HomeTranslator());
-
-        // Home Data
-        //dm.register(HomeData.class, ImmutableHomeData.class, new HomeDataBuilder());
-        DataRegistration.<HomeData,ImmutableHomeData>builder()
-                .dataClass(HomeData.class)
-                .immutableClass(ImmutableHomeData.class)
-                .builder(new HomeDataBuilder())
-                .manipulatorId("universalinternaldata")
-                .dataName("Universal Internal")
-                .buildAndRegister(myPlugin);
-        dm.registerContentUpdater(HomeData.class, new HomeDataBuilder.HomesUpdater());*/
-
     }
 
     @Listener

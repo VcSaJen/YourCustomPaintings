@@ -7,6 +7,7 @@ import com.flowpowered.math.vector.Vector3d;
 import com.flowpowered.math.vector.Vector3i;
 import com.google.common.collect.Lists;
 import com.vcsajen.yourcustompaintings.database.PaintingRecord;
+import com.vcsajen.yourcustompaintings.exceptions.MissingRequiredItemException;
 import com.vcsajen.yourcustompaintings.util.BestFitRect;
 import org.spongepowered.api.block.BlockTypes;
 import org.spongepowered.api.data.DataQuery;
@@ -21,6 +22,7 @@ import org.spongepowered.api.entity.EntityTypes;
 import org.spongepowered.api.entity.hanging.ItemFrame;
 import org.spongepowered.api.entity.living.player.Player;
 import org.spongepowered.api.entity.living.player.User;
+import org.spongepowered.api.entity.living.player.gamemode.GameModes;
 import org.spongepowered.api.event.Listener;
 import org.spongepowered.api.event.block.InteractBlockEvent;
 import org.spongepowered.api.event.cause.Cause;
@@ -29,8 +31,11 @@ import org.spongepowered.api.event.cause.entity.spawn.SpawnCause;
 import org.spongepowered.api.event.cause.entity.spawn.SpawnTypes;
 import org.spongepowered.api.event.filter.cause.Root;
 import org.spongepowered.api.item.ItemTypes;
+import org.spongepowered.api.item.inventory.Inventory;
+import org.spongepowered.api.item.inventory.InventoryArchetype;
 import org.spongepowered.api.item.inventory.ItemStack;
 import org.spongepowered.api.text.Text;
+import org.spongepowered.api.text.format.TextColors;
 import org.spongepowered.api.text.format.TextStyles;
 import org.spongepowered.api.util.Direction;
 import org.spongepowered.api.util.Identifiable;
@@ -180,19 +185,47 @@ public class PaintingPlacer {
 
     @Listener
     public void onInteractBlockEvent(InteractBlockEvent.Secondary.MainHand event, @Root Player eventSrc) {
-
-         if (event.getTargetBlock().getLocation().isPresent() && eventSrc.hasPermission("yourcustompaintings.paintingplacer.place")) {
+        if (event.getTargetBlock().getLocation().isPresent() && eventSrc.hasPermission("yourcustompaintings.paintingplacer.place")) {
             ItemStack item = eventSrc.getItemInHand(HandTypes.MAIN_HAND).orElse(null);
             if (isPlacerItem(item)) {
                 PaintingRecord paintingRecord = getPaintingFromPlacerItem(item);
                 if (paintingRecord!=null) {
-                    boolean placed = placePaintingIfPossible(paintingRecord, event.getTargetBlock().getLocation().get(), event.getTargetSide());
-                    if (placed) {
-                        if (!eventSrc.hasPermission("yourcustompaintings.paintingplacer.dontselfdestruct")) {
-                            item.setQuantity(item.getQuantity()-1);
-                            if (item.getQuantity()==1)
-                                eventSrc.setItemInHand(HandTypes.MAIN_HAND, null);
-                            else eventSrc.setItemInHand(HandTypes.MAIN_HAND, item);
+                    boolean hasRequiredItems;
+                    boolean pollPending = false;
+                    Inventory invFrames = null;
+                    Inventory invEmptyMaps = null;
+                    if (!eventSrc.hasPermission("yourcustompaintings.bypasssurvival") && eventSrc.gameMode().get() != GameModes.CREATIVE) {
+                        invFrames = eventSrc.getInventory().query(ItemTypes.ITEM_FRAME);
+                        invEmptyMaps = eventSrc.getInventory().query(ItemTypes.MAP);
+                        if (invFrames.totalItems()>=paintingRecord.getLengthMapId() && invEmptyMaps.totalItems()>=paintingRecord.getLengthMapId()) {
+                            hasRequiredItems = true;
+                            pollPending = true;
+                        } else {
+                            hasRequiredItems = false;
+                            eventSrc.sendMessage(Text.of(TextColors.RED, "Not enough items! " +
+                                    String.format("Required: %1$dx%2$s, %1$dx%3$s. Found: %4$dx%2$s, %5$dx%3$s.",
+                                            paintingRecord.getLengthMapId(),
+                                            ItemTypes.ITEM_FRAME.getName(),
+                                            ItemTypes.MAP.getName(),
+                                            invFrames.totalItems(),
+                                            invEmptyMaps.totalItems())));
+                        }
+                    } else hasRequiredItems = true;
+
+                    if (hasRequiredItems) {
+                        boolean placed = placePaintingIfPossible(paintingRecord, event.getTargetBlock().getLocation().get(), event.getTargetSide());
+                        if (placed) {
+                            if (pollPending) {
+                                invFrames.poll(paintingRecord.getLengthMapId());
+                                invEmptyMaps.poll(paintingRecord.getLengthMapId());
+                            }
+                            if (!eventSrc.hasPermission("yourcustompaintings.paintingplacer.dontselfdestruct") && eventSrc.gameMode().get() != GameModes.CREATIVE) {
+                                item.setQuantity(item.getQuantity() - 1);
+                                if (item.getQuantity() == 1)
+                                    eventSrc.setItemInHand(HandTypes.MAIN_HAND, null);
+                                else eventSrc.setItemInHand(HandTypes.MAIN_HAND, item);
+                            }
+
                         }
                     }
                 }
