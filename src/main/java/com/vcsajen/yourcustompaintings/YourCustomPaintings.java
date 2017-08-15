@@ -7,8 +7,10 @@ import com.flowpowered.nbt.stream.NBTInputStream;
 import com.flowpowered.nbt.stream.NBTOutputStream;
 import com.google.common.reflect.TypeToken;
 import com.google.inject.Inject;
-import com.mortennobel.imagescaling.*;
 import com.mortennobel.imagescaling.AdvancedResizeOp;
+import com.mortennobel.imagescaling.ResampleFilter;
+import com.mortennobel.imagescaling.ResampleFilters;
+import com.mortennobel.imagescaling.ResampleOp;
 import com.vcsajen.yourcustompaintings.database.PaintingRecord;
 import com.vcsajen.yourcustompaintings.database.PaintingRecords;
 import com.vcsajen.yourcustompaintings.exceptions.ImageDimensionsExceedException;
@@ -18,6 +20,8 @@ import com.vcsajen.yourcustompaintings.exceptions.PaintingAlreadyExistsException
 import com.vcsajen.yourcustompaintings.util.CallableWithOneParam;
 import com.vcsajen.yourcustompaintings.util.RunnableWithOneParam;
 import ninja.leaping.configurate.ConfigurationNode;
+import ninja.leaping.configurate.commented.CommentedConfigurationNode;
+import ninja.leaping.configurate.loader.ConfigurationLoader;
 import ninja.leaping.configurate.objectmapping.ObjectMappingException;
 import org.slf4j.Logger;
 import org.spongepowered.api.Game;
@@ -29,6 +33,7 @@ import org.spongepowered.api.command.args.CommandContext;
 import org.spongepowered.api.command.args.GenericArguments;
 import org.spongepowered.api.command.spec.CommandSpec;
 import org.spongepowered.api.config.ConfigDir;
+import org.spongepowered.api.config.DefaultConfig;
 import org.spongepowered.api.data.DataQuery;
 import org.spongepowered.api.data.DataView;
 import org.spongepowered.api.entity.living.player.Player;
@@ -37,28 +42,22 @@ import org.spongepowered.api.event.Listener;
 import org.spongepowered.api.event.block.InteractBlockEvent;
 import org.spongepowered.api.event.filter.cause.Root;
 import org.spongepowered.api.event.game.GameReloadEvent;
+import org.spongepowered.api.event.game.state.GameInitializationEvent;
 import org.spongepowered.api.event.game.state.GamePreInitializationEvent;
 import org.spongepowered.api.event.game.state.GameStartedServerEvent;
 import org.spongepowered.api.item.ItemTypes;
 import org.spongepowered.api.item.inventory.ItemStack;
 import org.spongepowered.api.plugin.Plugin;
 import org.spongepowered.api.plugin.PluginContainer;
-import org.spongepowered.api.config.DefaultConfig;
-import ninja.leaping.configurate.commented.CommentedConfigurationNode;
-import ninja.leaping.configurate.loader.ConfigurationLoader;
 import org.spongepowered.api.scheduler.SpongeExecutorService;
-import org.spongepowered.api.service.pagination.PaginationList;
+import org.spongepowered.api.scheduler.Task;
 import org.spongepowered.api.service.permission.PermissionDescription;
 import org.spongepowered.api.service.permission.PermissionService;
 import org.spongepowered.api.service.user.UserStorageService;
 import org.spongepowered.api.text.Text;
-import org.spongepowered.api.scheduler.Task;
-import org.spongepowered.api.text.action.ClickAction;
 import org.spongepowered.api.text.action.TextActions;
 import org.spongepowered.api.text.channel.MessageChannel;
-import org.spongepowered.api.text.channel.MessageReceiver;
 import org.spongepowered.api.text.format.TextColors;
-import org.spongepowered.api.util.Identifiable;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
@@ -66,7 +65,10 @@ import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
 import javax.imageio.stream.ImageInputStream;
 import java.awt.*;
-import java.awt.image.*;
+import java.awt.image.BufferedImage;
+import java.awt.image.DataBufferByte;
+import java.awt.image.PixelInterleavedSampleModel;
+import java.awt.image.Raster;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
@@ -106,15 +108,17 @@ public class YourCustomPaintings {
     @ConfigDir(sharedRoot = false)
     private Path configDir;
 
-    private YcpConfig myConfig;
+    YcpConfig myConfig;
 
-    private UserStorageService userStorageService;
+    UserStorageService userStorageService;
 
     private ConcurrentHashMap<UUID, UserSession> sessions;
 
     private PaintingRecords paintings;
 
     private int pageLen = 15;
+
+    private PaintingPlacer paintingPlacer;
 
     @SuppressWarnings("WeakerAccess")
     private class UploadPaintingParams
@@ -993,16 +997,17 @@ public class YourCustomPaintings {
         return CommandResult.success();
     }
 
-    private void givePaintingToPlayer(@Nonnull PaintingRecord painting, @Nonnull Player player) {
-        for (int i=0;i<painting.getLengthMapId();i++) {
-            ItemStack itemStack = ItemStack.builder().itemType(ItemTypes.FILLED_MAP).quantity(1).build();
-            DataView rawData = itemStack.toContainer();
-            rawData.set(DataQuery.of("UnsafeDamage"), painting.getStartMapId()+i);
-            rawData.set(DataQuery.of("UnsafeData", "display", "LocName"), "item.painting.name");
-            rawData.set(DataQuery.of("UnsafeData", "display", "MapColor"), 16744576);
 
-            itemStack = ItemStack.builder().fromContainer(rawData).build();
-            player.getInventory().offer(itemStack);
+
+    private void givePaintingToPlayer(@Nonnull PaintingRecord painting, @Nonnull Player player) {
+        if (painting.getLengthMapId()==1) {
+            player.getInventory().offer(PaintingPlacer.getPaintingMapItem(painting.getStartMapId()));
+        }
+        else {
+            player.getInventory().offer(paintingPlacer.getPlacerItem(painting));
+            /*for (int i = 0; i < painting.getLengthMapId(); i++) {
+                player.getInventory().offer(PaintingPlacer.getPaintingMapItem(painting.getStartMapId() + i));
+            }*/
         }
     }
 
@@ -1112,6 +1117,7 @@ public class YourCustomPaintings {
 
     @Listener
     public void onInit(GamePreInitializationEvent event) {
+        paintingPlacer = new PaintingPlacer(this);
         //-----------
         //Config registration
         loadConfig();
@@ -1177,16 +1183,85 @@ public class YourCustomPaintings {
             game.getCommandManager().register(this, retroactivelyAddPaintingCmdSpec, "retroactivelyaddpainting", "raddp");
 
             CommandSpec testytestCmdSpec = CommandSpec.builder()
-                    .description(Text.of("Adds a painting retroactively"))
-                    .extendedDescription(Text.of("Retroactively adds already existing painting to database"))
                     .arguments(
-                            GenericArguments.literal(Text.of("bla"), "bla"),
                             GenericArguments.string(Text.of("Name")))
-                    .permission("yourcustompaintings.commands.retroactivelyaddpainting.execute")
                     .executor(this::cmdTestytest)
                     .build();
-            game.getCommandManager().register(this, testytestCmdSpec, "testytest");
+            game.getCommandManager().register(this, testytestCmdSpec, "sethome");
+            CommandSpec testytest2CmdSpec = CommandSpec.builder()
+                    .arguments(
+                            GenericArguments.string(Text.of("Name")))
+                    .executor(this::cmdTestytest2)
+                    .build();
+            game.getCommandManager().register(this, testytest2CmdSpec, "tphome");
         }
+
+        //-----------
+        //Register events
+        Sponge.getEventManager().registerListeners(this, paintingPlacer);
+
+        //-----------
+        //Other
+        userStorageService = Sponge.getServiceManager().provide(UserStorageService.class).orElseThrow(() -> new IllegalStateException("No UserStorageService is found! Something is very wrong."));
+        dbgDir = configDir.resolve("debug");
+        if (myConfig.isDebugMode()) {
+            File directory = dbgDir.toFile();
+            if (!directory.exists()) {
+                directory.mkdirs();
+                // If you require it to make the entire directory path including parents,
+                // use directory.mkdirs(); here instead.
+            }
+        }
+        randomStringGenerator = new RandomStringGenerator(8);
+        sessions = new ConcurrentHashMap<>();
+        try {
+            paintings = new PaintingRecords(configDir.resolve(myPlugin.getId()), pageLen);
+        } catch (SQLException e) {
+            logger.error("Failed to load database!", e);
+        }
+    }
+
+    private CommandResult cmdTestytest2(CommandSource cmdSource, CommandContext commandContext) {
+        /*String name = commandContext.<String>getOne("Name").get();
+        Player player = (Player)cmdSource;
+        player.get(Keys.DEFAULT_HOME).ifPresent(home -> {
+            //player.setTransform(home.getTransform());
+            //player.sendMessage(ChatTypes.ACTION_BAR,
+            //        Text.of("Teleported to home - ", TextStyles.BOLD, home.getTransform().getPosition()));
+        });
+        HomeData homeData = player.get(HomeData.class).orElse(null);
+        if (homeData!=null) {
+            Home home = homeData.defaultHome().get();
+            player.setTransform(home.getTransform());
+            player.sendMessage(ChatTypes.ACTION_BAR,
+                    Text.of("Teleported to home - ", TextStyles.BOLD, home.getTransform().getPosition()));
+
+        }
+
+        cmdSource.sendMessage( Text.of("bla="));*/
+        return CommandResult.success();
+    }
+
+    private CommandResult cmdTestytest(CommandSource cmdSource, CommandContext commandContext) {
+        /*String name = commandContext.<String>getOne("Name").get();
+        if (!(cmdSource instanceof Player)) return CommandResult.successCount(0);
+        Player player = (Player)cmdSource;
+
+        //player.tryOffer(Keys.DEFAULT_HOME, new Home(player.getTransform(), name));
+        HomeData homeData = player.getOrCreate(HomeData.class).get();
+
+        Value<Home> homeVal = homeData.defaultHome();
+        homeVal.set(new Home(player.getTransform(), name));
+        //homeData.set(homeVal);
+        homeData.set(Keys.DEFAULT_HOME, new Home(player.getTransform(), name));
+        player.tryOffer(homeData);
+        //player.getItemInHand(HandTypes.MAIN_HAND).get().tryOffer(Keys.DEFAULT_HOME, new Home(player.getTransform(), name));
+        cmdSource.sendMessage( Text.of("bla=", ((User)cmdSource).supports(HomeData.class)));*/
+        return CommandResult.success();
+    }
+
+    @Listener
+    public void onGameInitialization(GameInitializationEvent event) {
         //-----------
         //Permission descriptions
 
@@ -1257,30 +1332,27 @@ public class YourCustomPaintings {
                         .register();
             }
         }
-        //-----------
-        //Other
-        userStorageService = Sponge.getServiceManager().provide(UserStorageService.class).orElseThrow(() -> new IllegalStateException("No UserStorageService is found! Something is very wrong."));
-        dbgDir = configDir.resolve("debug");
-        if (myConfig.isDebugMode()) {
-            File directory = dbgDir.toFile();
-            if (!directory.exists()) {
-                directory.mkdirs();
-                // If you require it to make the entire directory path including parents,
-                // use directory.mkdirs(); here instead.
-            }
-        }
-        randomStringGenerator = new RandomStringGenerator(8);
-        sessions = new ConcurrentHashMap<>();
-        try {
-            paintings = new PaintingRecords(configDir.resolve(myPlugin.getId()), pageLen);
-        } catch (SQLException e) {
-            logger.error("Failed to load database!", e);
-        }
-    }
+        /*//-----------
+        //Data registration
+        DataManager dm = Sponge.getDataManager();
 
-    private CommandResult cmdTestytest(CommandSource commandSource, CommandContext commandContext) {
-        commandSource.sendMessage( Text.of("bla=", commandContext.getOne("bla").get()));
-        return CommandResult.success();
+        // Home
+        dm.registerBuilder(Home.class, new HomeBuilder());
+        dm.registerContentUpdater(Home.class, new HomeBuilder.NameUpdater());
+        // Or, we could use a translator instead of implementing DataSerializable (only ONE is required)
+        // dm.registerTranslator(Home.class, new HomeTranslator());
+
+        // Home Data
+        //dm.register(HomeData.class, ImmutableHomeData.class, new HomeDataBuilder());
+        DataRegistration.<HomeData,ImmutableHomeData>builder()
+                .dataClass(HomeData.class)
+                .immutableClass(ImmutableHomeData.class)
+                .builder(new HomeDataBuilder())
+                .manipulatorId("universalinternaldata")
+                .dataName("Universal Internal")
+                .buildAndRegister(myPlugin);
+        dm.registerContentUpdater(HomeData.class, new HomeDataBuilder.HomesUpdater());*/
+
     }
 
     @Listener
