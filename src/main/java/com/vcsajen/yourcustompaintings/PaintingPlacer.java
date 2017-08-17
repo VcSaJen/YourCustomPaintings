@@ -141,6 +141,11 @@ public class PaintingPlacer {
         for (int i = 0; i <= bigRectW-1; i++) {
             for (int j = 0; j <= bigRectH-1; j++) {
                 Vector3i v1 = bigRectStart.add(leftDirection.mul(i)).add(0, -j, 0);
+                if (v1.getY()<0 || v1.getY()>255) {
+                    matrix[i][j] = false;
+                    continue;
+                }
+
                 boolean b1 = (new Location<World>(world, v1)).getProperty(PassableProperty.class).map(BooleanProperty::getValue).orElse(true);
 
                 Vector3i v2 = v1.add(dir.asBlockOffset());

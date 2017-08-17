@@ -619,7 +619,7 @@ public class YourCustomPaintings {
 
             ((HttpURLConnection)conn).disconnect();
             conn = null;
-            params.getMessageChannel().send(Text.of("Image was downloaded successfully. Scaling…"));
+            params.getMessageChannel().send(Text.of("Image was downloaded successfully. Scaling..."));
             BufferedImage scaledImg = new BufferedImage(128*params.getMapsX(), 128*params.getMapsY(), BufferedImage.TYPE_4BYTE_ABGR);
 
             double imgAspectRatio = 1.0d*img.getWidth()/img.getHeight();
@@ -650,7 +650,7 @@ public class YourCustomPaintings {
                     }
             }
 
-            params.getMessageChannel().send(Text.of("Converting to map palette…"));
+            params.getMessageChannel().send(Text.of("Converting to map palette..."));
 
             byte[][] nontiledMapData = new byte[scaledImg.getWidth()][scaledImg.getHeight()];
 
@@ -798,7 +798,7 @@ public class YourCustomPaintings {
 
             List<Future<Boolean>> futuresGetLastMapInd = minecraftExecutor.invokeAll(Collections.singleton(new CallableWithOneParam<RegisterMapParams,Boolean>(
                     new RegisterMapParams(params.getCallerPlr().orElse(null), params.getMessageChannel(), tmpId, params.getMapsX()*params.getMapsY()), regMapParams -> {
-                params.getMessageChannel().send(Text.of("Generating map…"));
+                params.getMessageChannel().send(Text.of("Generating map..."));
                 try {
                     int safeSpaceCount = 500;
 
@@ -883,7 +883,7 @@ public class YourCustomPaintings {
             params.getMessageChannel().send(Text.of(TextColors.RED, ex.getMessage()));
             logger.debug("Unknown, incorrect, or corrupt format while uploading painting!", ex);
         }
-        catch (Exception ex) {
+        catch (Exception | OutOfMemoryError ex) {
             params.getMessageChannel().send(Text.of(TextColors.RED, "Unknown error ("+ex.getClass().getSimpleName()+") occured while uploading painting: "+ex.getMessage()));
             throw ex;
         }
@@ -923,8 +923,8 @@ public class YourCustomPaintings {
         if (paintings.isPaintingExists(owner, name))
             throw new CommandException(Text.of("Error! Painting with that name already exists in user's scope!"));
 
-        int maxMapsX = 128;
-        int maxMapsY = 128;
+        int maxMapsX = 64;
+        int maxMapsY = 64;
         int maxPaintingW = 8192;
         int maxPaintingH = 8192;
         int maxImgFileSize = myConfig.getMaxImgFileSize();
@@ -952,7 +952,7 @@ public class YourCustomPaintings {
                     throw new CommandException(Text.of("Already uploading another painting!"));
             }
 
-            cmdSource.sendMessage(Text.of("Downloading " + url + "…"));
+            cmdSource.sendMessage(Text.of("Downloading " + url + "..."));
 
             Task task = Task.builder().execute(new RunnableWithOneParam<>(
                     new UploadPaintingParams(uuid,
@@ -1145,8 +1145,11 @@ public class YourCustomPaintings {
                 .description(Text.of("Get your previously uploaded painting"))
                 .extendedDescription(Text.of("Enter name of your painting to get it"))
                 .arguments(
-                        GenericArguments.optional(GenericArguments.requiringPermission(GenericArguments.onlyOne(GenericArguments.user(Text.of("Player"))), "yourcustompaintings.commands.getpainting.others")),
-                        GenericArguments.string(Text.of("Name")) )
+                        GenericArguments.firstParsing(
+                                GenericArguments.seq(
+                                        GenericArguments.requiringPermission(GenericArguments.onlyOne(GenericArguments.user(Text.of("Player"))), "yourcustompaintings.commands.getpainting.others"),
+                                        GenericArguments.string(Text.of("Name"))),
+                                GenericArguments.string(Text.of("Name"))))
                 .permission("yourcustompaintings.commands.getpainting.execute")
                 .executor(this::cmdGetPainting)
                 .build();
