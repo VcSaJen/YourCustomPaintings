@@ -26,8 +26,6 @@ import org.spongepowered.api.entity.living.player.gamemode.GameModes;
 import org.spongepowered.api.event.Listener;
 import org.spongepowered.api.event.block.InteractBlockEvent;
 import org.spongepowered.api.event.cause.Cause;
-import org.spongepowered.api.event.cause.entity.spawn.EntitySpawnCause;
-import org.spongepowered.api.event.cause.entity.spawn.SpawnCause;
 import org.spongepowered.api.event.cause.entity.spawn.SpawnTypes;
 import org.spongepowered.api.event.filter.cause.Root;
 import org.spongepowered.api.item.ItemTypes;
@@ -174,8 +172,7 @@ public class PaintingPlacer {
                 ((ItemFrame)itemFrame).setLocation(new Location<>(world, placePlace));
                 itemFrame.tryOffer(Keys.REPRESENTED_ITEM, getPaintingMapItem(paintingRecord.getStartMapId()+j*pw+i).createSnapshot());
                 itemFrame.tryOffer(Keys.DIRECTION, dir);
-                SpawnCause spawnCause = EntitySpawnCause.builder().entity(itemFrame).type(SpawnTypes.PLUGIN).build();
-                world.spawnEntity(itemFrame, Cause.source(spawnCause).build());
+                world.spawnEntity(itemFrame);
             }
         }
 
