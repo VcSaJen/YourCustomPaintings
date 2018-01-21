@@ -4,8 +4,9 @@ plugins {
     id "com.jfrog.bintray" version "1.7.3"
 }
 
-group 'com.vcsajen'
-version '1.0.0'
+group = "${project.group}.${project.name}"
+version = "[v${project.modVersion}]-[MC${project.minecraftVersion}]-[F${project.forgeBuild}]-[S${project.spongeAPIVersion.split("-")[0]}]"
+
 
 apply plugin: 'java'
 
@@ -22,6 +23,7 @@ repositories {
 
 def bintrayVersion = getVersion()+(System.getenv('TRAVIS') ? "."+System.getenv('TRAVIS_BUILD_NUMBER') : ".0")
 def bintrayProjName = rootProject.name
+
 setVersion(getVersion()+(System.getenv('TRAVIS') ? "."+System.getenv('TRAVIS_BUILD_NUMBER') : ".0")+(System.getenv('TRAVIS_TAG') ? "" : (System.getenv('TRAVIS') ? "-"+System.getenv('TRAVIS_COMMIT').take(7) : "")+"-SNAPSHOT"))
 
 static def getSecret(String secretname){
@@ -32,9 +34,11 @@ static def getSecret(String secretname){
     return props[secretname]
 }
 
+ext.spongeApiVersion = "${project.spongeAPIVersion}"
+
 dependencies {
     testCompile group: 'junit', name: 'junit', version: '4.12'
-    shadow 'org.spongepowered:spongeapi:7.0.0-SNAPSHOT'
+    shadow "org.spongepowered:spongeapi:$spongeApiVersion"
 
     compile 'com.flowpowered:flow-nbt:1.0.0'
     compile group: 'com.mortennobel', name: 'java-image-scaling', version: '0.8.6'
@@ -58,7 +62,7 @@ bintray {
         publish = true
         userOrg = user
         licenses = ['MIT']
-        vcsUrl = 'https://github.com/VcSaJen/YourCustomPaintings.git'
+        vcsUrl = 'https://github.com/SparkVGX/YourCustomPaintings.git'
         version {
             name = bintrayVersion.toString()
             desc = bintrayProjName.toString() + bintrayVersion.toString()
