@@ -85,7 +85,12 @@ import java.util.concurrent.TimeUnit;
  * Main plugin class
  * Created by VcSaJen on 26.07.2017 17:21.
  */
-@Plugin(id = "yourcustompaintings", name = "YourCustomPaintings", description = "Upload your own custom paintings to minecraft server!")
+@Plugin(
+        id = "yourcustompaintings",
+        name = "YourCustomPaintings",
+        description = "Upload your own custom paintings to minecraft server!",
+        version = "1.1"
+)
 public class YourCustomPaintings {
     @Inject
     private Logger logger;
@@ -777,7 +782,6 @@ public class YourCustomPaintings {
 
                         ImageIO.write(mapImgOut, "png", dbgDir.resolve("scaled_mapcolor_tile_"+l+"_"+k+"_img.png").toFile());
                     }
-                    //Генерируем сами файлы карт
                     Path fileName = dataFolder.resolve("map_tmp_"+tmpId+"_"+(k+l*params.getMapsX())+".dat");
                     myPlugin.getAsset("map_N.dat").orElseThrow(() -> new IOException("Asset map_N.dat not found"))
                             .copyToFile(fileName);

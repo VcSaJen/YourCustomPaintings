@@ -7,13 +7,11 @@ import com.flowpowered.math.vector.Vector3d;
 import com.flowpowered.math.vector.Vector3i;
 import com.google.common.collect.Lists;
 import com.vcsajen.yourcustompaintings.database.PaintingRecord;
-import com.vcsajen.yourcustompaintings.exceptions.MissingRequiredItemException;
 import com.vcsajen.yourcustompaintings.util.BestFitRect;
 import org.spongepowered.api.block.BlockTypes;
 import org.spongepowered.api.data.DataQuery;
 import org.spongepowered.api.data.DataView;
 import org.spongepowered.api.data.key.Keys;
-import org.spongepowered.api.data.property.AbstractProperty;
 import org.spongepowered.api.data.property.BooleanProperty;
 import org.spongepowered.api.data.property.block.PassableProperty;
 import org.spongepowered.api.data.type.HandTypes;
@@ -25,14 +23,9 @@ import org.spongepowered.api.entity.living.player.User;
 import org.spongepowered.api.entity.living.player.gamemode.GameModes;
 import org.spongepowered.api.event.Listener;
 import org.spongepowered.api.event.block.InteractBlockEvent;
-import org.spongepowered.api.event.cause.Cause;
-import org.spongepowered.api.event.cause.entity.spawn.EntitySpawnCause;
-import org.spongepowered.api.event.cause.entity.spawn.SpawnCause;
-import org.spongepowered.api.event.cause.entity.spawn.SpawnTypes;
 import org.spongepowered.api.event.filter.cause.Root;
 import org.spongepowered.api.item.ItemTypes;
 import org.spongepowered.api.item.inventory.Inventory;
-import org.spongepowered.api.item.inventory.InventoryArchetype;
 import org.spongepowered.api.item.inventory.ItemStack;
 import org.spongepowered.api.text.Text;
 import org.spongepowered.api.text.format.TextColors;
@@ -44,8 +37,6 @@ import org.spongepowered.api.world.Location;
 import org.spongepowered.api.world.World;
 
 import javax.annotation.Nullable;
-import java.awt.*;
-import java.text.ParseException;
 import java.util.List;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -71,7 +62,8 @@ public class PaintingPlacer {
 
     public ItemStack getPlacerItem(PaintingRecord paintingRecord)
     {
-        ItemStack itemStack = ItemStack.builder()
+
+        return ItemStack.builder()
                 .itemType(ItemTypes.STICK)
                 .quantity(1)
                 .keyValue(Keys.DISPLAY_NAME, Text.of(TextStyles.RESET, itemName))
@@ -81,8 +73,6 @@ public class PaintingPlacer {
                         Text.of("#"+paintingRecord.getStartMapId()+" "+paintingRecord.getMapsX()+"x"+paintingRecord.getMapsY())
                 ))
                 .build();
-
-        return itemStack;
     }
 
     private Pattern pname = Pattern.compile("^\"(.+)\"$");
@@ -174,8 +164,7 @@ public class PaintingPlacer {
                 ((ItemFrame)itemFrame).setLocation(new Location<>(world, placePlace));
                 itemFrame.tryOffer(Keys.REPRESENTED_ITEM, getPaintingMapItem(paintingRecord.getStartMapId()+j*pw+i).createSnapshot());
                 itemFrame.tryOffer(Keys.DIRECTION, dir);
-                SpawnCause spawnCause = EntitySpawnCause.builder().entity(itemFrame).type(SpawnTypes.PLUGIN).build();
-                world.spawnEntity(itemFrame, Cause.source(spawnCause).build());
+                world.spawnEntity(itemFrame);
             }
         }
 
