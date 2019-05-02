@@ -1,7 +1,7 @@
 plugins {
     id 'org.spongepowered.plugin' version '0.8.1'
     id 'com.github.johnrengelman.shadow' version '2.0.1'
-    id "com.jfrog.bintray" version "1.7.3"
+    id "com.jfrog.bintray" version "1.8.4"
     id 'com.qixalite.spongestart2' version '3.2.3'
 }
 
