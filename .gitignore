@@ -79,3 +79,5 @@ nb-configuration.xml
 # Secret #
 ##########
 secrets.properties
+
+*.exe.stackdump

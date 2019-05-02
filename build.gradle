@@ -2,12 +2,14 @@ plugins {
     id 'org.spongepowered.plugin' version '0.8.1'
     id 'com.github.johnrengelman.shadow' version '2.0.1'
     id "com.jfrog.bintray" version "1.7.3"
+    id 'com.qixalite.spongestart2' version '3.2.3'
 }
 
 group 'com.vcsajen'
-version '1.0.0'
+version '1.1.0'
 
 apply plugin: 'java'
+apply plugin: 'maven'
 
 sourceCompatibility = 1.8
 
@@ -26,15 +28,17 @@ setVersion(getVersion()+(System.getenv('TRAVIS') ? "."+System.getenv('TRAVIS_BUI
 
 static def getSecret(String secretname){
     def result = System.getenv(secretname)
-    if (result != null && result != "") return result;
+    if (result != null && result != "") return result
     def Properties props = new Properties()
-    props.load(new FileInputStream(new File('secrets.properties')))
+    def File secretFile = new File('secrets.properties')
+    if (!secretFile.exists()) return null
+    props.load(new FileInputStream(secretFile))
     return props[secretname]
 }
 
 dependencies {
     testCompile group: 'junit', name: 'junit', version: '4.12'
-    shadow 'org.spongepowered:spongeapi:7.0.0-SNAPSHOT'
+    shadow 'org.spongepowered:spongeapi:7.1.0'
 
     compile 'com.flowpowered:flow-nbt:1.0.0'
     compile group: 'com.mortennobel', name: 'java-image-scaling', version: '0.8.6'
@@ -49,8 +53,8 @@ shadowJar {
 }
 
 bintray {
-    user = getSecret('BINTRAY_USER_NAME')
-    key = getSecret('BINTRAY_API_KEY')
+    user = getSecret('BINTRAY_USER_NAME') ?: "user"
+    key = getSecret('BINTRAY_API_KEY') ?: "0000000000000000000000000000000000000000"
     configurations = ['archives']
     pkg {
         repo = 'generic'
@@ -66,4 +70,9 @@ bintray {
             vcsTag = System.getenv('TRAVIS_TAG') ? System.getenv('TRAVIS_TAG') : System.getenv('TRAVIS_COMMIT')
         }
     }
+}
+
+spongestart {
+    minecraft '1.12.2'
+    forge '14.23.4.2705'
 }
