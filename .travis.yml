@@ -9,6 +9,7 @@ cache:
   - "$HOME/.gradle/wrapper/"
 after_success:
 - "./gradlew bintrayUpload"
+- "./gradlew oreDeploy"
 deploy:
   provider: releases
   api_key:

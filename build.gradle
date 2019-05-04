@@ -29,6 +29,14 @@ def bintrayProjName = rootProject.name
 setVersion(getVersion()+(System.getenv('TRAVIS') ? "."+System.getenv('TRAVIS_BUILD_NUMBER') : ".0")+(System.getenv('TRAVIS_TAG') ? "" : (System.getenv('TRAVIS') ? "-"+System.getenv('TRAVIS_COMMIT').take(7) : "")+"-SNAPSHOT"))
 ext.isReleaseVersion = !version.endsWith("SNAPSHOT")
 
+if (getSecret('CERT_KEY_ID')!=null && (gradle.startParameter.getTaskNames().contains("oreDeploy") ||
+        gradle.startParameter.getTaskNames().contains("signArchives") ||
+        gradle.startParameter.getTaskNames().contains("signShadow"))) { //Very Ugly
+    if (!file("./secring.gpg").exists()) {
+        new File("./secring.gpg").bytes = getSecret('CERT_PRIVATE_KEY_BASE64').decodeBase64()
+    }
+}
+
 static def getSecret(String secretname){
     def result = System.getenv(secretname)
     if (result != null && result != "") return result
@@ -49,21 +57,19 @@ static String encodeHtmlEntities(String s) {
     }
 }
 
-def encHtmlEntitiesReplacement =
-
 tasks.withType(Sign) {
     onlyIf { getSecret('CERT_KEY_ID')!=null }
-}
-
-signing {
-    required { gradle.taskGraph.hasTask("oreDeploy") }
-    sign configurations.shadow
 }
 
 allprojects {
     ext."signing.keyId" = getSecret('CERT_KEY_ID') ?: ""
     ext."signing.secretKeyRingFile" = "./secring.gpg"
     ext."signing.password" = getSecret('CERT_PWD') ?: ""
+}
+
+signing {
+    required { gradle.taskGraph.hasTask("oreDeploy") }
+    sign configurations.shadow
 }
 
 oreDeploy {
