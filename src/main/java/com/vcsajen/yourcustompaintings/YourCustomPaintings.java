@@ -82,10 +82,10 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Main plugin class
+ * Main plugin class ツд♞🂡
  * Created by VcSaJen on 26.07.2017 17:21.
  */
-@Plugin(id = "yourcustompaintings", name = "YourCustomPaintings", description = "Upload your own custom paintings to minecraft server!")
+@Plugin(id = "yourcustompaintings", name = "YourCustomPaintings", description = "Upload your own custom paintings to minecraft server!", authors = {"VcSaJen"})
 public class YourCustomPaintings {
     @Inject
     private Logger logger;

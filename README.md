@@ -107,6 +107,6 @@ https://youtu.be/wIjFeIylXjs
   
 **Sponge Version**  
 Tested on:  
-- SpongeForge 1.12.1-2444-7.0.0-BETA-2568  
-- SpongeVanilla 1.12.1-7.0.0-BETA-315
+- SpongeForge 1.12.2-2705-7.1.0-BETA-3440
+- SpongeVanilla 1.12.2-7.1.0-BETA-116
 

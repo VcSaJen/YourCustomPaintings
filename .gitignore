@@ -79,5 +79,8 @@ nb-configuration.xml
 # Secret #
 ##########
 secrets.properties
+secring.gpg
 
+# Other #
+##########
 *.exe.stackdump
