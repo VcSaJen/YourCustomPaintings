@@ -8,7 +8,7 @@ plugins {
 }
 
 group 'com.vcsajen'
-version '1.2.0'
+version '1.1.16'
 
 apply plugin: 'java'
 apply plugin: 'maven'
@@ -29,11 +29,18 @@ def bintrayProjName = rootProject.name
 setVersion(getVersion()+(System.getenv('TRAVIS') ? "."+System.getenv('TRAVIS_BUILD_NUMBER') : ".0")+(System.getenv('TRAVIS_TAG') ? "" : (System.getenv('TRAVIS') ? "-"+System.getenv('TRAVIS_COMMIT').take(7) : "")+"-SNAPSHOT"))
 ext.isReleaseVersion = !version.endsWith("SNAPSHOT")
 
-if (getSecret('CERT_KEY_ID')!=null && (gradle.startParameter.getTaskNames().contains("oreDeploy") ||
-        gradle.startParameter.getTaskNames().contains("signArchives") ||
-        gradle.startParameter.getTaskNames().contains("signShadow"))) { //Very Ugly
-    if (!file("./secring.gpg").exists()) {
-        new File("./secring.gpg").bytes = getSecret('CERT_PRIVATE_KEY_BASE64').decodeBase64()
+gradle.taskGraph.whenReady { taskGraph ->
+    if (taskGraph.allTasks.any { it instanceof Sign }) {
+        if (getSecret('CERT_KEY_ID')!=null) {
+            if (!file("./secring.gpg").exists()) {
+                new File("./secring.gpg").bytes = getSecret('CERT_PRIVATE_KEY_BASE64').decodeBase64()
+            }
+            allprojects {
+                ext."signing.keyId" = getSecret('CERT_KEY_ID') ?: ""
+                ext."signing.secretKeyRingFile" = "./secring.gpg"
+                ext."signing.password" = getSecret('CERT_PWD') ?: ""
+            }
+        }
     }
 }
 
@@ -57,15 +64,9 @@ static String encodeHtmlEntities(String s) {
     }
 }
 
-tasks.withType(Sign) {
+/*tasks.withType(Sign) {
     onlyIf { getSecret('CERT_KEY_ID')!=null }
-}
-
-allprojects {
-    ext."signing.keyId" = getSecret('CERT_KEY_ID') ?: ""
-    ext."signing.secretKeyRingFile" = "./secring.gpg"
-    ext."signing.password" = getSecret('CERT_PWD') ?: ""
-}
+}*/
 
 signing {
     required { gradle.taskGraph.hasTask("oreDeploy") }
@@ -76,11 +77,11 @@ oreDeploy {
     apiKey = getSecret('ORE_API_KEY') ?: '00000000000000000000000000000000'
     recommended = isReleaseVersion
     deploy = configurations.archives
-    channel = isReleaseVersion ? /*'release'*/'snapshot' : 'snapshot' //TODO: Fix when ORE fix their bug
+    channel = isReleaseVersion ? /*'release'*/'snapshot' : 'snapshot' //TODO: Fix when ORE fixes their bug
     forumPost = isReleaseVersion
     changelog = encodeHtmlEntities(isReleaseVersion ? 'See intermediate snapshot versions for changelog' :
             "In the version "+getVersion()+", following changes were made:\r\n\r\n"+ //Useless padding to satisfy Ore's obsession with "min 15 characters"
-            (System.getenv('TRAVIS_COMMIT_MESSAGE') ? System.getenv('TRAVIS_COMMIT_MESSAGE') : 'Unknown жツ'))
+            (System.getenv('TRAVIS_COMMIT_MESSAGE') ? System.getenv('TRAVIS_COMMIT_MESSAGE') : 'Unknown')) //encodeHtmlEntities to circumvent Ore's Unicode bug
 }
 
 task signArchives(dependsOn: 'signShadow') {
